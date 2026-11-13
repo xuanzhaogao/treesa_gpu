@@ -5,24 +5,36 @@ networks of k-SAT). It is a CUDA port of TreeSA, the simulated-annealing optimiz
 [OMEinsumContractionOrders.jl](https://github.com/TensorBFS/OMEinsumContractionOrders.jl) /
 [omeco](https://github.com/GiggleLiu/omeco). It runs thousands of annealing chains at once.
 
+## Performance
+
+Compared with omeco's TreeSA (Rust, multithreaded). Tables and raw data: [`docs/REPORT.md`](docs/REPORT.md).
+
+| what | result |
+|---|---|
+| Annealing throughput (Quadro RTX 6000) | 9.2·10^9 node visits/s on random 3-SAT n = 100: **about 300× omeco on all 16 CPU cores** |
+| Tree quality at equal wall time (random 3-SAT n = 60–120) | tc lower by **1.8–11.5 log2 units**, i.e. 3.4×–2900× fewer operations, within omeco's default run time |
+| Against omeco's heavy setting (32 trials × 200 sweeps, 10–25 s) | better trees in **1.1–2.5 s** |
+| Contraction time on an H100 ([booltn](https://github.com/xuanzhaogao/booltn)), GPU-time energy `tc+gpu2` | trees contract **4–64× faster** than omeco trees (grid 3-SAT L = 22: 1.24 s → 19 ms) |
+| Slicing inside the annealer | modeled total time **1.5–341× lower** than omeco TreeSA + `slice_code` (geometric mean 7.2×); random 3-SAT n = 70 measured **41.7 s** vs about 13 min projected for the omeco tree |
+| Scale | any number of labels (tested to 2025, grid L = 45), up to 32767 tensors |
+
+Where it does not win:
+* Easy instances, because each call costs about 0.3 s of process start.
+* Grid slicing runs, which take as long as omeco on 96 cores; the GPU wins on contraction time, not on
+  optimizer wall time.
+* `mode="gpu2"` on its own, which gets stuck; use `"tc+gpu2"`.
+
+## Features
+
 * **Same algorithm, more chains.** The Julia move set is ported exactly; a CPU reference port matches
   the GPU kernels bit for bit. At equal trial counts it reproduces omeco's quality.
-* **Throughput.** About 300× the node-visit rate of omeco on all 16 cores of the workstation, measured
-  on a Quadro RTX 6000. Within omeco's default wall time it finds random 3-SAT trees with tc lower by
-  1.8–11.5 log2 units, i.e. 3.4×–2900× fewer operations (n = 60–120).
-* **Population schemes.** Independent chains (best of N), population annealing, or truncation
-  selection.
+* **Population schemes:** independent chains (best of N), population annealing, or truncation selection.
 * **GPU-time energies.** Besides omeco's tc/sc score, the annealer can minimize the modeled contraction
-  time of the [booltn](https://github.com/xuanzhaogao/booltn) kernels on an H100 (`mode="tc+gpu2"`). In measurements on the H100
-  these trees contract **4–64× faster** than omeco trees of the same size.
+  time of the booltn kernels on an H100.
 * **Slicing inside the annealer** (`slicing=True`). The slice set is annealed together with the tree.
-  Example: random 3-SAT n = 70 is solved in 41.7 s on the H100, against about 13 min projected for the
-  omeco tree.
-* Any number of labels (tested up to 2025) and up to 32767 tensors.
 
-Full design, validation and benchmark tables: [`docs/REPORT.md`](docs/REPORT.md). The H100 end-to-end
-measurements of these trees are in the research repository [booltn-gpu](https://github.com/xuanzhaogao/booltn-gpu), which includes
-this package as a submodule.
+The H100 measurements of these trees are in the research repository [booltn-gpu](https://github.com/xuanzhaogao/booltn-gpu),
+which includes this package as a submodule.
 
 ## Install
 
