@@ -1,4 +1,4 @@
-"""Python driver for the GPU TreeSA binary (built by `make -C treesa_gpu` into treesa_gpu/bin/).
+"""Python driver for the GPU TreeSA binary (built by `make` in the repository root into treesa_gpu/bin/).
 
     from treesa_gpu import optimize
     tree, info = optimize(ixs, iy, nchains=2048, niters=20, sc_target=30, mode="tc", init="greedy")
@@ -214,7 +214,7 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
     if verbose and p.stderr:
         print(p.stderr, file=sys.stderr)
     if p.returncode != 0 and not os.path.exists(BINARY) and not SSH_HOST:
-        raise RuntimeError(f"treesa_gpu binary {BINARY} not found: build it with `make -C treesa_gpu`")
+        raise RuntimeError(f"treesa_gpu binary {BINARY} not found: build it with `make` in the treesa_gpu repository")
     if p.returncode != 0:
         raise RuntimeError(f"treesa_gpu failed ({p.returncode}): {p.stderr[-2000:]}")
     with open(out) as f:

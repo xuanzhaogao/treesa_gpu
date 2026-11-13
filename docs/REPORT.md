@@ -686,7 +686,7 @@ python bench/summarize.py > bench/results/summary.md
 python bench/gpu2_study.py > bench/results/gpu2_study.md  # measured H100 model v2
 python bench/slicing_compare.py                            # slicing comparison (saves trees)
 python bench/summarize_slicing.py > bench/results/slicing_summary.md
-python bench/save_best.py                                  # *_best.json in <repo>/trees/gpusa_slice
+python bench/save_best.py                                  # *_best.json in booltn-gpu/trees/gpusa_slice
 # on the H100 (shared GPU; every binary call wrapped in flock):
 #   make ARCH=sm_90a OUT=treesa_gpu/bin/treesa_gpu_sm90
 #   TREESA_GPU_BINARY=$PWD/treesa_gpu/bin/treesa_gpu_sm90 TREESA_GPU_LOCK=/tmp/booltn_gpu.lock python bench/...

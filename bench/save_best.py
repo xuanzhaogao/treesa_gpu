@@ -1,4 +1,4 @@
-"""Write <repo>/trees/gpusa_slice/<name>_sc<T>_best.json: the best (lowest modeled total H100 time,
+"""Write booltn-gpu/trees/gpusa_slice/<name>_sc<T>_best.json: the best (lowest modeled total H100 time,
 sc <= T) GPU-TreeSA tree per instance and sc target from bench/results/slicing_compare.jsonl.
 In-annealer winners are copied from the saved files; greedy_slice winners are regenerated (GPU runs
 are deterministic for a fixed seed) and checked to reproduce the benchmark's modeled time.

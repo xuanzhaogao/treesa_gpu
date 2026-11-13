@@ -8,7 +8,7 @@ or a modeled GPU contraction time; optional slicing inside the annealer.
     tree, info = treesa_gpu.optimize(ixs, iy, nchains=1024, niters=20, sc_target=30, mode="tc")
 
 Modules: ``driver`` (optimize, tree <-> binary format), ``trees`` (tc/sc, GPU-time energies).
-The binary is built with ``make -C treesa_gpu`` (see README.md).
+The binary is built with ``make`` in the repository root (see README.md).
 """
 from .driver import optimize, runner_json, julia_betas, greedy_tree, dict_to_children, children_to_dict
 from . import trees

@@ -34,7 +34,8 @@ def sat_einsum(clauses, n):
     ixs = [[abs(l) - 1 for l in c] for c in clauses]
     return ixs, [], {l: 2 for ix in ixs for l in ix}
 
-GRAPHS = os.path.join(HERE, "..", "..", "..", "omeco", "benchmarks", "graphs")
+# omeco benchmark graphs (github.com/GiggleLiu/omeco, benchmarks/graphs); override with $OMECO_GRAPHS
+GRAPHS = os.environ.get("OMECO_GRAPHS", os.path.join(HERE, "..", "..", "..", "omeco", "benchmarks", "graphs"))
 
 
 def sat(n, seed=1, alpha=4.26, k=3):

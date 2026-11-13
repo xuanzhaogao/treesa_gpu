@@ -1,5 +1,6 @@
 # Build the GPU TreeSA binary (module load cuda/12.8.0). No Hopper-only features are used.
 #   make                                              -> treesa_gpu/bin/treesa_gpu  for the local GPU (ARCH=native)
+#   (run from the repository root)
 #   make ARCH=sm_75  OUT=treesa_gpu/bin/treesa_gpu_sm75   e.g. Quadro RTX 6000 (workstation)
 #   make ARCH=sm_90a OUT=treesa_gpu/bin/treesa_gpu_sm90   H100 (select with TREESA_GPU_BINARY)
 #   tests/run_checks.sh <binary>                      validation matrix (see tests/)

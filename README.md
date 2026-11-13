@@ -13,24 +13,26 @@ networks of k-SAT). It is a CUDA port of TreeSA, the simulated-annealing optimiz
 * **Population schemes.** Independent chains (best of N), population annealing, or truncation
   selection.
 * **GPU-time energies.** Besides omeco's tc/sc score, the annealer can minimize the modeled contraction
-  time of the [booltn](../booltn) kernels on an H100 (`mode="tc+gpu2"`). In measurements on the H100
+  time of the [booltn](https://github.com/xuanzhaogao/booltn) kernels on an H100 (`mode="tc+gpu2"`). In measurements on the H100
   these trees contract **4–64× faster** than omeco trees of the same size.
 * **Slicing inside the annealer** (`slicing=True`). The slice set is annealed together with the tree.
   Example: random 3-SAT n = 70 is solved in 41.7 s on the H100, against about 13 min projected for the
   omeco tree.
 * Any number of labels (tested up to 2025) and up to 32767 tensors.
 
-Full design, validation and benchmark tables: [`docs/REPORT.md`](docs/REPORT.md).
+Full design, validation and benchmark tables: [`docs/REPORT.md`](docs/REPORT.md). The H100 end-to-end
+measurements of these trees are in the research repository [booltn-gpu](https://github.com/xuanzhaogao/booltn-gpu), which includes
+this package as a submodule.
 
 ## Install
 
 ```bash
 module load cuda/12.8.0          # in a login shell
-make -C treesa_gpu               # -> treesa_gpu/treesa_gpu/bin/treesa_gpu for the local GPU (ARCH=native)
-pip install -e treesa_gpu        # pure Python; optional: omeco for init="greedy"
+make                             # -> treesa_gpu/bin/treesa_gpu for the local GPU (ARCH=native)
+pip install -e .                 # pure Python; optional: omeco for init="greedy"
 ```
 
-Cross-builds: `make -C treesa_gpu ARCH=sm_90a OUT=treesa_gpu/bin/treesa_gpu_sm90` (H100) or `ARCH=sm_75`
+Cross-builds: `make ARCH=sm_90a OUT=treesa_gpu/bin/treesa_gpu_sm90` (H100) or `ARCH=sm_75`
 (RTX 6000). Pick a binary at run time with `TREESA_GPU_BINARY`. The package does not depend on `booltn`.
 
 ## Use

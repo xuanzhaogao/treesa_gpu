@@ -1,11 +1,11 @@
 """Slicing comparison: omeco TreeSA + omeco slice_code(TreeSASlicer)  vs  greedy_slice (booltn/booltn/
 slicer.py, kind="gpu") applied to GPU-TreeSA unsliced trees  vs  GPU TreeSA with in-annealer slicing.
-Also evaluates the existing trees in <repo>/trees/ for the same instance and sc target.
+Also evaluates the existing trees in booltn-gpu/trees/ for the same instance and sc target.
 
 All numbers are recomputed with treesa_gpu.trees on the sliced network (ixs with sliced labels removed):
 per-slice tc / sc, #sliced, total tc = per-slice tc + #sliced, modeled total H100 time =
 tree_gpu_time_v2 x 2^#sliced.  Trees of the in-annealer runs are saved to
-<repo>/trees/gpusa_slice/<name>_sc<T>_<tc|gpu2>.json as {"tree", "sliced"} (iy on the sliced ixs).
+booltn-gpu/trees/gpusa_slice/<name>_sc<T>_<tc|gpu2>.json as {"tree", "sliced"} (iy on the sliced ixs).
 
     python bench/slicing_compare.py [--instances ...] [--targets 30,34,36,37] > log
 """
@@ -23,7 +23,8 @@ import instances  # noqa: E402
 import treesa_gpu as tg  # noqa: E402  (the package next to bench/)
 from treesa_gpu import trees as tu  # noqa: E402
 
-TREES = os.path.join(HERE, "..", "..", "trees")
+# trees/ of the booltn-gpu research repository (this package is its submodule); override with $BOOLTN_TREES
+TREES = os.environ.get("BOOLTN_TREES", os.path.join(HERE, "..", "..", "trees"))
 OUTDIR = os.path.join(TREES, "gpusa_slice")
 RES = os.path.join(HERE, "results", "slicing_compare.jsonl")
 HOST = os.uname().nodename.split(".")[0]
@@ -92,7 +93,7 @@ def main():
     ap.add_argument("--targets", default="30,34,36,37")
     ap.add_argument("--methods", default="existing,omeco,greedy_tc,greedy_tcgpu2,slice_tc,slice_tcgpu2")
     ap.add_argument("--out", default=None, help="results jsonl (default bench/results/slicing_compare.jsonl)")
-    ap.add_argument("--no-save", action="store_true", help="do not write trees to <repo>/trees/gpusa_slice")
+    ap.add_argument("--no-save", action="store_true", help="do not write trees to booltn-gpu/trees/gpusa_slice")
     ap.add_argument("--omeco-trials", type=int, default=10)
     ap.add_argument("--omeco-threads", type=int, default=32)
     ap.add_argument("--gpu-niters", type=int, default=20)
