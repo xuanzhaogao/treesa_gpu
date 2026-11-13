@@ -2,11 +2,37 @@
 import json
 import os
 import random
-import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "..", "..", "py"))
-from satgen import random_ksat, sat_einsum, grid_ksat  # noqa: E402
+
+
+# --- the two generators below are copies of booltn.satgen (same RNG calls -> identical instances) ---
+def random_ksat(n, m, k, seed=0):
+    rng = random.Random(seed)
+    clauses = []
+    for _ in range(m):
+        vs = rng.sample(range(1, n + 1), k)
+        clauses.append([v if rng.random() < 0.5 else -v for v in vs])
+    return clauses
+
+
+def grid_ksat(L, alpha, k=3, radius=1, seed=0):
+    rng = random.Random(seed)
+    n = L * L
+    clauses = []
+    for _ in range(round(alpha * n)):
+        cx, cy = rng.randrange(L), rng.randrange(L)
+        cand = [(x, y) for x in range(max(0, cx - radius), min(L, cx + radius + 1))
+                for y in range(max(0, cy - radius), min(L, cy + radius + 1))]
+        pts = rng.sample(cand, k)
+        clauses.append([(x * L + y + 1) * (1 if rng.random() < 0.5 else -1) for x, y in pts])
+    return clauses, n
+
+
+def sat_einsum(clauses, n):
+    """One tensor per clause, labels = 0-based variables; scalar output."""
+    ixs = [[abs(l) - 1 for l in c] for c in clauses]
+    return ixs, [], {l: 2 for ix in ixs for l in ix}
 
 GRAPHS = os.path.join(HERE, "..", "..", "..", "omeco", "benchmarks", "graphs")
 
@@ -47,7 +73,7 @@ def lattice_sat(L, seed=1, alpha=4.0, radius=1, k=3):
 
 
 def grid(L, alpha=3.0, seed=1, radius=1, k=3):
-    """booltn_gpu/py/satgen.grid_ksat (local 3-SAT on an L x L grid), as requested for slicing."""
+    """booltn.satgen.grid_ksat (local 3-SAT on an L x L grid), as requested for slicing."""
     clauses, n = grid_ksat(L, alpha, k, radius, seed)
     ixs, iy, _ = sat_einsum(clauses, n)
     return ixs, iy

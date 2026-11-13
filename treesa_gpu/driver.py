@@ -1,16 +1,17 @@
-"""Python driver for the GPU TreeSA binary (build/treesa_gpu).
+"""Python driver for the GPU TreeSA binary (built by `make -C treesa_gpu` into treesa_gpu/bin/).
 
     from treesa_gpu import optimize
     tree, info = optimize(ixs, iy, nchains=2048, niters=20, sc_target=30, mode="tc", init="greedy")
 
 ``tree`` is an omeco-format dict (``{"tensor_index": i}`` / ``{"args": [l, r], "eins": {...}}``) with
 internal ``iy`` recomputed from the topology; ``info`` holds tc/sc (recomputed in Python with
-``tree_utils.complexity``), modeled GPU time, timings, throughput and the annealing trace.
+``trees.complexity``), modeled GPU time, timings, throughput and the annealing trace.
 
-The binary runs on the local GPU (default build: sm_75 for the workstation's Quadro RTX 6000).
-Optional environment variables:
-  TREESA_GPU_BINARY  path of the binary (e.g. build/treesa_gpu_sm90 for an H100)
-  TREESA_GPU_SSH     run the binary on this host via ssh (home is shared; temp files go to .tmp/)
+The binary runs on the local GPU. Optional environment variables:
+  TREESA_GPU_BINARY  path of the binary (default: treesa_gpu/bin/treesa_gpu inside this package;
+                     e.g. bin/treesa_gpu_sm90 for an H100 built with `make ARCH=sm_90a OUT=...`)
+  TREESA_GPU_SSH     run the binary on this host via ssh (the temp dir must be on a shared filesystem)
+  TREESA_GPU_TMP     temp dir used with TREESA_GPU_SSH (default ~/.cache/treesa_gpu)
   TREESA_GPU_LOCK    wrap the run in ``flock <path>`` (to serialize with other GPU jobs)
 """
 import json
@@ -22,17 +23,16 @@ import sys
 import tempfile
 import time
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "..", "py"))
-import tree_utils  # noqa: E402
+from . import trees
 
-BINARY = os.environ.get("TREESA_GPU_BINARY", os.path.join(HERE, "build", "treesa_gpu"))
+HERE = os.path.dirname(os.path.abspath(__file__))
+BINARY = os.environ.get("TREESA_GPU_BINARY", os.path.join(HERE, "bin", "treesa_gpu"))
 SSH_HOST = os.environ.get("TREESA_GPU_SSH", "")
 LOCK = os.environ.get("TREESA_GPU_LOCK", "")
-SHARED_TMP = os.path.join(HERE, ".tmp")
+SHARED_TMP = os.environ.get("TREESA_GPU_TMP", os.path.join(os.path.expanduser("~"), ".cache", "treesa_gpu"))
 
-DEFAULT_GPU_MODEL = dict(tree_utils.GPU_MODEL)
-DEFAULT_GPU_MODEL2 = dict(tree_utils.GPU_MODEL_V2)
+DEFAULT_GPU_MODEL = dict(trees.GPU_MODEL)
+DEFAULT_GPU_MODEL2 = dict(trees.GPU_MODEL_V2)
 GM2_KEYS = ("launch", "perm_bw_bits", "cc_bit", "cc_cell", "tc_bit", "tc_pad_cell", "tc_out_bit", "small_rank",
             "small_cell")
 
@@ -87,12 +87,12 @@ def children_to_dict(ch, m, ixs, iy):
         l, r = ch[v - m]
         return {"args": [rec(l), rec(r)], "eins": {"ixs": [[], []], "iy": []}}
 
-    return tree_utils.recompute_outputs(rec(2 * m - 2), ixs, iy)
+    return trees.recompute_outputs(rec(2 * m - 2), ixs, iy)
 
 
 def check_tree(d, m):
     """Every leaf exactly once, binary."""
-    ids = tree_utils.leaf_ids(d)
+    ids = trees.leaf_ids(d)
     return sorted(ids) == list(range(m))
 
 
@@ -121,9 +121,9 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
 
     slicing: anneal a slice set S together with the tree (see README).  Then ``tree`` is the tree of
             the *sliced* network: its internal ``iy`` are recomputed on ``ixs`` with the sliced labels
-            removed (``tree_utils.recompute_outputs(tree, ixs_sliced, iy_sliced)``), and
+            removed (``trees.recompute_outputs(tree, ixs_sliced, iy_sliced)``), and
             ``info["sliced"]`` lists the sliced labels (original label ids).  ``info`` reports per-slice
-            tc/sc/modeled times recomputed with tree_utils on the sliced network (``tc_py``, ``sc_py``,
+            tc/sc/modeled times recomputed with trees.py on the sliced network (``tc_py``, ``sc_py``,
             ``gpu_time2_py``) and totals over the 2^|S| slices (``tc_total_py``, ``gpu_time2_total_py``).
             ``runner_json(tree, info)`` gives the ``{"tree", "sliced"}`` dict for the H100 runner.
             sc_target is a feasibility target: the best chain with sc <= sc_target is returned, and if
@@ -131,8 +131,8 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
 
     mode:   "tc"  -> Julia/omeco energy (tc, sc with sc_target/sc_weight)
             "gpu" -> GPU-runtime-aware energy (log2 of modeled time of the two affected contractions)
-            "gpu2" -> same with the measured H100 model v2 (tree_utils.gpu_time_v2; constants from
-                     ``gpu_model2``, default tree_utils.GPU_MODEL_V2)
+            "gpu2" -> same with the measured H100 model v2 (trees.gpu_time_v2; constants from
+                     ``gpu_model2``, default trees.GPU_MODEL_V2)
             "tc+gpu" / "tc+gpu2" -> anneal with "tc" on ``betas``, then continue the same population with "gpu"/"gpu2"
                      on ``stage2_betas`` (default 1:0.05:16, i.e. cold; ``stage2_niters`` defaults to
                      ``niters``).  Recommended for the GPU-time objective: "gpu" alone from a hot start
@@ -213,6 +213,8 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
     wall = time.time() - t0
     if verbose and p.stderr:
         print(p.stderr, file=sys.stderr)
+    if p.returncode != 0 and not os.path.exists(BINARY) and not SSH_HOST:
+        raise RuntimeError(f"treesa_gpu binary {BINARY} not found: build it with `make -C treesa_gpu`")
     if p.returncode != 0:
         raise RuntimeError(f"treesa_gpu failed ({p.returncode}): {p.stderr[-2000:]}")
     with open(out) as f:
@@ -223,11 +225,11 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
     iy_s = [l for l in iy if l not in sl]
     tree = children_to_dict(res["tree"], m, ixs_s, iy_s)
     assert check_tree(tree, m), "output tree does not contain every leaf exactly once"
-    tc, sc = tree_utils.complexity(tree, ixs_s)
+    tc, sc = trees.complexity(tree, ixs_s)
     info = dict(res)
     del info["tree"]
-    t1 = tree_utils.tree_gpu_time(tree, ixs_s, gm)
-    t2 = tree_utils.tree_gpu_time_v2(tree, ixs_s, gm2)
+    t1 = trees.tree_gpu_time(tree, ixs_s, gm)
+    t2 = trees.tree_gpu_time_v2(tree, ixs_s, gm2)
     info.update(sliced=sliced, tc_py=tc, sc_py=sc, gpu_time_py=t1, gpu_time2_py=t2, tc_total_py=tc + len(sliced),
                 gpu_time2_total_py=t2 * 2.0 ** len(sliced), wall=wall, t_greedy=t_greedy, tmpdir=tmpdir)
     for fn in os.listdir(tmpdir):
@@ -241,9 +243,10 @@ def runner_json(tree, info):
     return {"tree": tree, "sliced": list(info.get("sliced", []))}
 
 
-if __name__ == "__main__":
-    from satgen import random_ksat, sat_einsum
+if __name__ == "__main__":  # smoke test: python -m treesa_gpu.driver [n]  (random 3-SAT, alpha = 4.26)
+    import random
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 60
-    ixs, iy, _ = sat_einsum(random_ksat(n, round(4.26 * n), 3, 1), n)
+    rng = random.Random(1)
+    ixs, iy = [rng.sample(range(n), 3) for _ in range(round(4.26 * n))], []
     tree, info = optimize(ixs, iy, nchains=512, niters=10, sc_target=30, verbose=True)
     print({k: v for k, v in info.items() if k != "trace"})

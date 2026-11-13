@@ -55,7 +55,7 @@ for m, v in ratios.items():
     g = math.exp(sum(math.log(x) for x in v) / len(v))
     print(f"| {SHORT.get(m, m)} | {g:.2f} | {max(v):.2f} | {wins[m]} |")
 checks = [r.get("internal_matches_tree_utils") for r in rows if "internal_matches_tree_utils" in r]
-print(f"\nKernel-internal (per-slice tc, sc, #sliced, modeled total) == tree_utils recomputation: "
+print(f"\nKernel-internal (per-slice tc, sc, #sliced, modeled total) == treesa_gpu.trees recomputation: "
       f"{sum(1 for c in checks if c)}/{len(checks)} runs.  Greedy repairs needed: "
       f"{sum(1 for r in rows if r.get('n_repair'))} runs.")
 

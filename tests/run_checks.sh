@@ -4,7 +4,7 @@
 # host energy (on the sliced network), (3) other kernel family bit-identical, (4) CPU Julia-port
 # reference bit-identical.  (3)/(4) are skipped when slice moves are on (only the warp kernels
 # implement them; the reference has no slice moves).
-BIN=${1:-build/treesa_gpu}
+BIN=${1:-treesa_gpu/bin/treesa_gpu}
 cd "$(dirname "$0")/.."
 fail=0
 run() {  # name, args...

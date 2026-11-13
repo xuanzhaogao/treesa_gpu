@@ -28,7 +28,7 @@ SC_TARGET = 30.0
 def omeco_worker(cfg):
     """Runs inside a fresh process so RAYON_NUM_THREADS takes effect."""
     import omeco
-    import tree_utils as tu
+    from treesa_gpu import trees as tu
     ixs, iy = instances.get(cfg["instance"])
     sizes = {l: 2 for ix in ixs for l in ix}
     opt = omeco.TreeSA(ntrials=cfg["ntrials"], niters=cfg["niters"], preprocess=cfg["preprocess"],

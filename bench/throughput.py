@@ -11,7 +11,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-BIN = os.environ.get("TREESA_GPU_BINARY", os.path.join(ROOT, "build", "treesa_gpu"))
+BIN = os.environ.get("TREESA_GPU_BINARY", os.path.join(ROOT, "treesa_gpu", "bin", "treesa_gpu"))
 
 
 BETAS = "0.01:0.05:15"

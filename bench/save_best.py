@@ -1,4 +1,4 @@
-"""Write booltn_gpu/trees/gpusa_slice/<name>_sc<T>_best.json: the best (lowest modeled total H100 time,
+"""Write <repo>/trees/gpusa_slice/<name>_sc<T>_best.json: the best (lowest modeled total H100 time,
 sc <= T) GPU-TreeSA tree per instance and sc target from bench/results/slicing_compare.jsonl.
 In-annealer winners are copied from the saved files; greedy_slice winners are regenerated (GPU runs
 are deterministic for a fixed seed) and checked to reproduce the benchmark's modeled time.
@@ -13,7 +13,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, ".."))
 import slicing_compare as sc  # noqa: E402
 import instances  # noqa: E402
-import treesa_gpu as tg  # noqa: E402
+import treesa_gpu as tg  # noqa: E402  (the package next to bench/)
 
 rows = [json.loads(l) for l in open(sc.RES) if l.strip()]
 mine = [r for r in rows if r["method"].startswith("GPU") and "niters=" not in r["method"]]

@@ -2,10 +2,10 @@
 
     python tests/test_python.py
 
-(0) tree_utils.complexity agrees with omeco's own tree.complexity on omeco trees,
+(0) trees.complexity agrees with omeco's own tree.complexity on omeco trees,
 (1) dict <-> children conversion round-trips,
 (2) GPU output trees are valid (binary, every leaf exactly once, internal iy from topology),
-(3) tc / sc / modeled time reported by the binary agree with tree_utils on the returned dict,
+(3) tc / sc / modeled time reported by the binary agree with treesa_gpu.trees on the returned dict,
 for all schemes, inits and energy modes.
 """
 import math
@@ -16,8 +16,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(HERE, "..", "bench"))
 import instances  # noqa: E402
-import treesa_gpu as tg  # noqa: E402
-import tree_utils as tu  # noqa: E402
+import treesa_gpu as tg  # noqa: E402  (the package next to bench/)
+from treesa_gpu import trees as tu  # noqa: E402
 import omeco  # noqa: E402
 
 fails = 0
@@ -39,7 +39,7 @@ for name in ("sat40", "sat60", "reg3_100", "lat10"):
         c = t.complexity(ixs, sizes)
         d = tu.recompute_outputs(t.to_dict(), ixs, iy)
         tc, sc = tu.complexity(d, ixs)
-        check(abs(tc - c.tc) < 1e-9 and sc == c.sc, f"{name}: tree_utils == omeco complexity ({type(opt).__name__}: {tc:.3f}/{sc})")
+        check(abs(tc - c.tc) < 1e-9 and sc == c.sc, f"{name}: trees == omeco complexity ({type(opt).__name__}: {tc:.3f}/{sc})")
         # (1)
         ch = tg.dict_to_children(d, m)
         d2 = tg.children_to_dict(ch, m, ixs, iy)
@@ -64,7 +64,7 @@ for name in ("sat40", "sat60", "reg3_100", "lat10"):
                       f"time2 {info['gpu_time2']:.4e}=={info['gpu_time2_py']:.4e}")
 
 # (4) slicing: returned tree is the tree of the sliced network (iy on ixs without sliced labels), the
-# binary's per-slice tc / sc / #sliced and modeled total time equal tree_utils on the sliced network,
+# binary's per-slice tc / sc / #sliced and modeled total time equal treesa_gpu.trees on the sliced network,
 # and the {"tree", "sliced"} runner json round-trips.  Includes a > 512-label instance (wide path).
 import json  # noqa: E402
 for name, T in (("sat60", 30), ("reg3_250", 24), ("grid24", 34)):

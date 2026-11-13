@@ -1,6 +1,6 @@
 """Extra seeds of GPU TreeSA (tc+gpu2, in-annealer slicing, PA 576 x 20) for the sc targets the H100 engine
 runs (36, 37).  Candidate trees go to bench/results/candidates/; `--update-best` then replaces
-booltn_gpu/trees/gpusa_slice/<name>_sc<T>_best.json when a candidate has a lower modeled total time.
+<repo>/trees/gpusa_slice/<name>_sc<T>_best.json when a candidate has a lower modeled total time.
 
     python bench/extra_seeds.py --seeds 2,3,4            # (on the GPU node, with TREESA_GPU_LOCK set)
     python bench/extra_seeds.py --update-best
@@ -18,7 +18,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, ".."))
 import slicing_compare as sc  # noqa: E402
 import instances  # noqa: E402
-import treesa_gpu as tg  # noqa: E402
+import treesa_gpu as tg  # noqa: E402  (the package next to bench/)
 
 CAND = os.path.join(HERE, "results", "candidates")
 

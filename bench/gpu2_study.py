@@ -1,4 +1,4 @@
-"""Modeled H100 time (tree_utils.gpu_time_v2) of trees optimized for tc vs for the v2 model.
+"""Modeled H100 time (trees.gpu_time_v2) of trees optimized for tc vs for the v2 model.
 
     python bench/gpu2_study.py > bench/results/gpu2_study.md
 
@@ -16,15 +16,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, ".."))
 import instances  # noqa: E402
-import treesa_gpu as tg  # noqa: E402
-import tree_utils as tu  # noqa: E402
+import treesa_gpu as tg  # noqa: E402  (the package next to bench/)
+from treesa_gpu import trees as tu  # noqa: E402
 
 MODEL = tu.GPU_MODEL_V2
 SC_TARGET = 30.0
 
 
 def path_of(B, M, N, K, model=MODEL):
-    """Which branch of gpu_time_v2 a contraction takes: 'small', 'cc' or 'tc' (mirrors tree_utils)."""
+    """Which branch of gpu_time_v2 a contraction takes: 'small', 'cc' or 'tc' (mirrors treesa_gpu.trees)."""
     if B + M + N <= model["small_rank"]:
         return "small"
     if K >= 7 and max(M, N) >= 5:

@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "treesa_gpu"
+version = "0.1.0"
+description = "GPU simulated-annealing contraction-order optimizer (TreeSA) for tensor networks with dimension-2 indices"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+# init="greedy" uses omeco's GreedyMethod (https://github.com/GiggleLiu/omeco, python bindings built with maturin)
+
+[tool.setuptools]
+packages = ["treesa_gpu"]
+
+[tool.setuptools.package-data]
+treesa_gpu = ["bin/*"]
