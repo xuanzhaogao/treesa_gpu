@@ -1,0 +1,1 @@
+{"nsliced": 15, "tc": 40.69110817400042, "sc": 36, "tc_total": 55.69110817400042, "gpu2_slice": 0.04855853673390981, "gpu2_total": 1591.1661316967566, "name": "r3sat_n80_s1", "instance": "sat80", "sc_target": 37, "seed": 3, "mode": "tc+gpu2", "gpu": {"nchains": 576, "niters": 20, "scheme": "pa", "seed": 3}, "wall": 1.190445899963379, "host": "workergpu165"}
