@@ -8,7 +8,8 @@ internal ``iy`` recomputed from the topology; ``info`` holds tc/sc (recomputed i
 ``trees.complexity``), modeled GPU time, timings, throughput and the annealing trace.
 
 The binary runs on the local GPU. Optional environment variables:
-  TREESA_GPU_BINARY  path of the binary (default: treesa_gpu/bin/treesa_gpu inside this package;
+  TREESA_GPU_BINARY  path of the binary (default: treesa_gpu/bin/treesa_gpu_sm90 on an H100/H200 if built, else
+                     treesa_gpu/bin/treesa_gpu inside this package;
                      e.g. bin/treesa_gpu_sm90 for an H100 built with `make ARCH=sm_90a OUT=...`)
   TREESA_GPU_SSH     run the binary on this host via ssh (the temp dir must be on a shared filesystem)
   TREESA_GPU_TMP     temp dir used with TREESA_GPU_SSH (default ~/.cache/treesa_gpu)
@@ -26,7 +27,22 @@ import time
 from . import trees
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BINARY = os.environ.get("TREESA_GPU_BINARY", os.path.join(HERE, "bin", "treesa_gpu"))
+def _default_binary():
+    """bin/treesa_gpu_sm90 on a compute-capability-9 GPU (H100/H200) when it was built, else bin/treesa_gpu."""
+    sm90 = os.path.join(HERE, "bin", "treesa_gpu_sm90")
+    if os.path.exists(sm90) and not os.environ.get("TREESA_GPU_SSH"):
+        try:
+            import subprocess
+            cc = subprocess.run(["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
+                                capture_output=True, text=True, timeout=20).stdout.split()
+            if cc and all(c.startswith("9.") for c in cc):
+                return sm90
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return os.path.join(HERE, "bin", "treesa_gpu")
+
+
+BINARY = os.environ.get("TREESA_GPU_BINARY") or _default_binary()
 SSH_HOST = os.environ.get("TREESA_GPU_SSH", "")
 LOCK = os.environ.get("TREESA_GPU_LOCK", "")
 SHARED_TMP = os.environ.get("TREESA_GPU_TMP", os.path.join(os.path.expanduser("~"), ".cache", "treesa_gpu"))
