@@ -117,7 +117,7 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
              init="greedy", seed=1, scheme="indep", kernel="auto", trunc_frac=0.25, eval_every=1,
              gpu_model=None, h100_model=None, wpb=0, block=0, lpc=32, init_tree=None, stage2_betas=None,
              stage2_niters=None, slicing=False, slice_moves=1, slice_every=1, max_slices=0, init_slices=None,
-             wide=False, verbose=False, timeout=3600, **old_names):
+             wide=False, verbose=False, timeout=3600, device=None, **old_names):
     """Run GPU TreeSA.  Returns (tree_dict, info).
 
     slicing: anneal a slice set S together with the tree (see README).  Then ``tree`` is the tree of
@@ -142,6 +142,7 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
             per chain) | "tree" (use ``init_tree`` dict)
     scheme: "indep" (independent chains, best-of-N) | "pa" (population annealing, resampling after
             every evaluated level) | "trunc" (replace worst ``trunc_frac`` by copies of the best)
+    device: GPU id for this run (sets CUDA_VISIBLE_DEVICES for the binary); see also optimize_multi.
     kernel: "auto" (warp per chain; chains staged in shared memory when the population exceeds L2)
             | "warp" | "warpsm" | "seq" | "seqsm";  lpc = lanes per chain for warp kernels (32, 16, 8)
     """
@@ -211,6 +212,8 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
     if not verbose:
         args += ["--quiet"]
     cmd = " ".join(shlex.quote(a) for a in args)
+    if device is not None:
+        cmd = f"CUDA_VISIBLE_DEVICES={shlex.quote(str(device))} {cmd}"
     if LOCK:
         cmd = f"flock {LOCK} {cmd}"
     if SSH_HOST:
@@ -243,6 +246,22 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
         os.remove(os.path.join(tmpdir, fn))
     os.rmdir(tmpdir)
     return tree, info
+
+
+def optimize_multi(ixs, iy, gpus, seeds=None, objective=None, **kw):
+    """Independent GPU TreeSA runs, one per GPU (different seeds), in parallel; returns the best
+    (tree, info) and the list of all infos. objective: "tc" (total tc), "h100" (modeled H100 total time)
+    or None (h100 for h100 modes, else tc)."""
+    import concurrent.futures as cf
+    seeds = seeds or list(range(1, len(gpus) + 1))
+    mode = MODE_ALIASES.get(kw.get("mode", "tc"), kw.get("mode", "tc"))
+    objective = objective or ("h100" if "h100" in mode else "tc")
+    key = (lambda i: i["h100_time_total_py"]) if objective == "h100" else (lambda i: i["tc_total_py"])
+    with cf.ThreadPoolExecutor(max_workers=len(gpus)) as ex:
+        futs = [ex.submit(optimize, ixs, iy, seed=s, device=g, **kw) for g, s in zip(gpus, seeds)]
+        res = [f.result() for f in futs]
+    best = min(res, key=lambda r: key(r[1]))
+    return best[0], best[1], [r[1] for r in res]
 
 
 def runner_json(tree, info):

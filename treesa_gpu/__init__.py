@@ -10,8 +10,8 @@ or a modeled GPU contraction time; optional slicing inside the annealer.
 Modules: ``driver`` (optimize, tree <-> binary format), ``trees`` (tc/sc, GPU-time energies).
 The binary is built with ``make`` in the repository root (see README.md).
 """
-from .driver import optimize, runner_json, julia_betas, greedy_tree, dict_to_children, children_to_dict
+from .driver import optimize, optimize_multi, runner_json, julia_betas, greedy_tree, dict_to_children, children_to_dict
 from . import trees
 
-__all__ = ["optimize", "runner_json", "julia_betas", "greedy_tree", "dict_to_children", "children_to_dict", "trees"]
+__all__ = ["optimize", "optimize_multi", "runner_json", "julia_betas", "greedy_tree", "dict_to_children", "children_to_dict", "trees"]
 __version__ = "0.1.0"
