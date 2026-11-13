@@ -1,1 +1,0 @@
-{"nsliced": 4, "tc": 50.890312004452376, "sc": 36, "tc_total": 54.890312004452376, "gpu2_slice": 0.2625920422548211, "gpu2_total": 4.201472676077137, "name": "grid_L24_a3_s1", "instance": "grid24", "sc_target": 36, "seed": 3, "mode": "tc+gpu2", "gpu": {"nchains": 576, "niters": 20, "scheme": "pa", "seed": 3}, "wall": 11.497077465057373, "host": "workergpu165"}

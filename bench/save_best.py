@@ -24,27 +24,27 @@ for inst in ([] if "--cross-target" in sys.argv else sc.NAMES):
         rr = [r for r in mine if r["instance"] == inst and r["sc_target"] == T and r["sc"] <= T]
         if not rr:
             continue
-        b = min(rr, key=lambda r: r["gpu2_total"])
+        b = min(rr, key=lambda r: r["h100_total"])
         dst = os.path.join(sc.OUTDIR, f"{sc.NAMES[inst]}_sc{T}_best.json")
         if "in-annealer" in b["method"]:
-            mode = "tc" if b["method"].startswith("GPU tc +") else "gpu2"
+            mode = "tc" if b["method"].startswith("GPU tc +") else "h100"
             src = os.path.join(sc.OUTDIR, f"{sc.NAMES[inst]}_sc{T}_{mode}.json")
             shutil.copyfile(src, dst)
             meta = dict(index[os.path.basename(src)], source=os.path.basename(src))
         else:
             from slicer import greedy_slice
             ixs, iy = instances.get(inst)
-            mode = "tc+gpu2" if "tc+gpu2" in b["method"] else "tc"
+            mode = "tc+h100" if "tc+h100" in b["method"] else "tc"
             tree, _ = tg.optimize(ixs, iy, sc_target=T, mode=mode, stage2_betas=sc.STAGE2, **sc.GPU)
             sliced, d = greedy_slice(tree, ixs, T, kind="gpu")
             _, mt = sc.evaluate(d, sliced, ixs)
-            assert abs(mt["gpu2_total"] / b["gpu2_total"] - 1) < 1e-9, (inst, T, mt, b)
+            assert abs(mt["h100_total"] / b["h100_total"] - 1) < 1e-9, (inst, T, mt, b)
             with open(dst, "w") as f:
                 json.dump({"tree": d, "sliced": sliced}, f)
             meta = dict(mt, mode=mode + " unsliced, then greedy_slice(gpu)", sc_target=T, gpu=sc.GPU)
         meta["method"] = b["method"]
         index[os.path.basename(dst)] = meta
-        print(f"{os.path.basename(dst)}: {b['method']}: #sliced {b['nsliced']} sc {b['sc']} modeled {b['gpu2_total']:.4g} s")
+        print(f"{os.path.basename(dst)}: {b['method']}: #sliced {b['nsliced']} sc {b['sc']} modeled {b['h100_total']:.4g} s")
 if "--cross-target" not in sys.argv:
     with open(idx_path, "w") as f:
         json.dump(index, f, indent=1, sort_keys=True)
@@ -71,10 +71,10 @@ def cross_target_pass():
             ok = [c for c in cands if c[0] == name and c[1]["sc"] <= T]
             if not ok:
                 continue
-            b = min(ok, key=lambda c: c[1]["gpu2_total"])
+            b = min(ok, key=lambda c: c[1]["h100_total"])
             dst = os.path.join(sc.OUTDIR, f"{name}_sc{T}_best.json")
-            if b[1]["gpu2_total"] < index[os.path.basename(dst)]["gpu2_total"] * (1 - 1e-12):
-                print(f"{os.path.basename(dst)}: {index[os.path.basename(dst)]['gpu2_total']:.4g} -> {b[1]['gpu2_total']:.4g} s "
+            if b[1]["h100_total"] < index[os.path.basename(dst)]["h100_total"] * (1 - 1e-12):
+                print(f"{os.path.basename(dst)}: {index[os.path.basename(dst)]['h100_total']:.4g} -> {b[1]['h100_total']:.4g} s "
                       f"(from {os.path.basename(b[2])})")
                 if os.path.abspath(b[2]) != os.path.abspath(dst):
                     shutil.copyfile(b[2], dst)

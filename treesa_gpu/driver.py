@@ -32,8 +32,9 @@ LOCK = os.environ.get("TREESA_GPU_LOCK", "")
 SHARED_TMP = os.environ.get("TREESA_GPU_TMP", os.path.join(os.path.expanduser("~"), ".cache", "treesa_gpu"))
 
 DEFAULT_GPU_MODEL = dict(trees.GPU_MODEL)
-DEFAULT_GPU_MODEL2 = dict(trees.GPU_MODEL_V2)
-GM2_KEYS = ("launch", "perm_bw_bits", "cc_bit", "cc_cell", "tc_bit", "tc_pad_cell", "tc_out_bit", "small_rank",
+DEFAULT_H100_MODEL = dict(trees.H100_MODEL)
+MODE_ALIASES = {"gpu2": "h100", "tc+gpu2": "tc+h100"}   # old mode names
+H100_KEYS = ("launch", "perm_bw_bits", "cc_bit", "cc_cell", "tc_bit", "tc_pad_cell", "tc_out_bit", "small_rank",
             "small_cell")
 
 
@@ -114,9 +115,9 @@ def julia_betas(start=0.01, step=0.05, stop=15.0):
 # ---------------------------------------------------------------------------------------------
 def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_weight=1.0, mode="tc",
              init="greedy", seed=1, scheme="indep", kernel="auto", trunc_frac=0.25, eval_every=1,
-             gpu_model=None, gpu_model2=None, wpb=0, block=0, lpc=32, init_tree=None, stage2_betas=None,
+             gpu_model=None, h100_model=None, wpb=0, block=0, lpc=32, init_tree=None, stage2_betas=None,
              stage2_niters=None, slicing=False, slice_moves=1, slice_every=1, max_slices=0, init_slices=None,
-             wide=False, verbose=False, timeout=3600):
+             wide=False, verbose=False, timeout=3600, **old_names):
     """Run GPU TreeSA.  Returns (tree_dict, info).
 
     slicing: anneal a slice set S together with the tree (see README).  Then ``tree`` is the tree of
@@ -124,16 +125,16 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
             removed (``trees.recompute_outputs(tree, ixs_sliced, iy_sliced)``), and
             ``info["sliced"]`` lists the sliced labels (original label ids).  ``info`` reports per-slice
             tc/sc/modeled times recomputed with trees.py on the sliced network (``tc_py``, ``sc_py``,
-            ``gpu_time2_py``) and totals over the 2^|S| slices (``tc_total_py``, ``gpu_time2_total_py``).
+            ``h100_time_py``) and totals over the 2^|S| slices (``tc_total_py``, ``h100_time_total_py``).
             ``runner_json(tree, info)`` gives the ``{"tree", "sliced"}`` dict for the H100 runner.
             sc_target is a feasibility target: the best chain with sc <= sc_target is returned, and if
             none reaches it the result is repaired greedily (Julia TreeSASlicer rule; ``info["n_repair"]``).
 
     mode:   "tc"  -> Julia/omeco energy (tc, sc with sc_target/sc_weight)
-            "gpu" -> GPU-runtime-aware energy (log2 of modeled time of the two affected contractions)
-            "gpu2" -> same with the measured H100 model v2 (trees.gpu_time_v2; constants from
-                     ``gpu_model2``, default trees.GPU_MODEL_V2)
-            "tc+gpu" / "tc+gpu2" -> anneal with "tc" on ``betas``, then continue the same population with "gpu"/"gpu2"
+            "gpu" -> GPU-runtime-aware energy with a simple roofline model (trees.gpu_time; ``gpu_model``)
+            "h100" -> modeled time of the booltn kernels measured on an H100 (trees.h100_time; constants from
+                     ``h100_model``, default trees.H100_MODEL). Old name: "gpu2".
+            "tc+gpu" / "tc+h100" -> anneal with "tc" on ``betas``, then continue the same population with "gpu"/"h100"
                      on ``stage2_betas`` (default 1:0.05:16, i.e. cold; ``stage2_niters`` defaults to
                      ``niters``).  Recommended for the GPU-time objective: "gpu" alone from a hot start
                      gets stuck (the launch-overhead floor and tile padding make the energy flat).
@@ -144,14 +145,20 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
     kernel: "auto" (warp per chain; chains staged in shared memory when the population exceeds L2)
             | "warp" | "warpsm" | "seq" | "seqsm";  lpc = lanes per chain for warp kernels (32, 16, 8)
     """
+    if old_names:   # names before the gpu2 -> h100 rename
+        unknown = set(old_names) - {"gpu_model2"}
+        if unknown:
+            raise TypeError(f"unexpected keyword arguments {sorted(unknown)}")
+        h100_model = h100_model or old_names["gpu_model2"]
+    mode = MODE_ALIASES.get(mode, mode)
     if betas is None:
         betas = julia_betas()
     gm = dict(DEFAULT_GPU_MODEL)
     if gpu_model:
         gm.update(gpu_model)
-    gm2 = dict(DEFAULT_GPU_MODEL2)
-    if gpu_model2:
-        gm2.update(gpu_model2)
+    h100m = dict(DEFAULT_H100_MODEL)
+    if h100_model:
+        h100m.update(h100_model)
     m = len(ixs)
     if SSH_HOST:  # the remote host must see the temp files: use a directory on the shared home
         os.makedirs(SHARED_TMP, exist_ok=True)
@@ -173,7 +180,7 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
     bf = os.path.join(tmpdir, "betas.txt")
     with open(bf, "w") as f:
         f.write("\n".join(repr(float(b)) for b in betas) + "\n")
-    if mode in ("tc+gpu", "tc+gpu2"):
+    if mode in ("tc+gpu", "tc+h100"):
         b2 = stage2_betas if stage2_betas is not None else julia_betas(1.0, 0.05, 16.0)
         bf2 = os.path.join(tmpdir, "betas2.txt")
         with open(bf2, "w") as f:
@@ -182,11 +189,11 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
                  "--stage2-mode", mode.split("+")[1]]
     out = os.path.join(tmpdir, "out.json")
     args += ["--betas", "file:" + bf, "--nchains", str(nchains), "--niters", str(niters),
-             "--sc-target", str(sc_target), "--sc-weight", str(sc_weight), "--mode", mode if mode in ("gpu", "gpu2") else "tc",
+             "--sc-target", str(sc_target), "--sc-weight", str(sc_weight), "--mode", mode if mode in ("gpu", "h100") else "tc",
              "--scheme", scheme, "--kernel", kernel, "--seed", str(seed), "--trunc-frac", str(trunc_frac),
              "--eval-every", str(eval_every), "--out", out,
              "--gm", ",".join(str(gm[k]) for k in ("peak_ops", "bw_bits", "m0", "n0", "k0", "launch")),
-             "--gm2", ",".join(str(gm2[k]) for k in GM2_KEYS)]
+             "--h100-model", ",".join(str(h100m[k]) for k in H100_KEYS)]
     if slicing:
         args += ["--slicing", "--slice-moves", str(slice_moves), "--slice-every", str(slice_every)]
         if max_slices:
@@ -229,9 +236,9 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
     info = dict(res)
     del info["tree"]
     t1 = trees.tree_gpu_time(tree, ixs_s, gm)
-    t2 = trees.tree_gpu_time_v2(tree, ixs_s, gm2)
-    info.update(sliced=sliced, tc_py=tc, sc_py=sc, gpu_time_py=t1, gpu_time2_py=t2, tc_total_py=tc + len(sliced),
-                gpu_time2_total_py=t2 * 2.0 ** len(sliced), wall=wall, t_greedy=t_greedy, tmpdir=tmpdir)
+    t2 = trees.tree_h100_time(tree, ixs_s, h100m)
+    info.update(sliced=sliced, tc_py=tc, sc_py=sc, gpu_time_py=t1, h100_time_py=t2, tc_total_py=tc + len(sliced),
+                h100_time_total_py=t2 * 2.0 ** len(sliced), wall=wall, t_greedy=t_greedy, tmpdir=tmpdir)
     for fn in os.listdir(tmpdir):
         os.remove(os.path.join(tmpdir, fn))
     os.rmdir(tmpdir)

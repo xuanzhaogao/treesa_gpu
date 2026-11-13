@@ -86,13 +86,13 @@ is kept on the host and returned.
   (`gpu_model=` / `--gm peak,bw,m0,n0,k0,launch`).  Everything is evaluated in log2 domain (no
   overflow: `ops` reaches 2^130 on these instances), `dtc = log2(t_l1+t_r1) − log2(t_l0+t_r0)`.
   The sc term is unchanged.  The reported score is the total modeled time Σt over the tree.
-* `gpu2`: the measured H100 model `trees.gpu_time_v2` (batched small contractions for output
+* `h100`: the measured H100 model `trees.h100_time` (batched small contractions for output
   rank ≤ 14; otherwise `3·launch + permutes + min(cc, tc-core)`), mirrored in log2 domain with all
-  nine constants as runtime parameters (`gpu_model2=` / `--gm2`).
-* `tc+gpu` / `tc+gpu2`: anneal in `tc` on `βs`, then continue the *same population* in `gpu`/`gpu2`
+  nine constants as runtime parameters (`h100_model=` / `--h100-model`).
+* `tc+gpu` / `tc+h100`: anneal in `tc` on `βs`, then continue the *same population* in `gpu`/`h100`
   on a cold schedule (`stage2_betas`, default `1:0.05:16`).  The stage-1 best tree is kept as the
   incumbent, so the result is never worse than the `tc` tree in the new objective.  See results:
-  `gpu`/`gpu2` alone do not work well.
+  `gpu`/`h100` alone do not work well.
 
 ### Wide label sets (> 512 labels)
 Instances with ≤ 512 labels use the register fast path (`W` ∈ {1,2,4,8,12,16} words, the five label
@@ -114,30 +114,30 @@ the work list of the warp kernel lives in shared memory (2 bytes/node).
   add a random label of a randomly chosen largest internal tensor (p = 1/2), remove a random sliced
   label (1/4) or swap (1/4) — and accepts them with Metropolis at the current β on the total energy
   `E = |S| + log2 Σ_v cost_v(masked) + sc_weight·max(0, sc − sc_target)`  (cost = 2^tc for `tc`,
-  modeled seconds for `gpu`/`gpu2`), evaluated over the whole tree by the warp (3 tree passes per
+  modeled seconds for `gpu`/`h100`), evaluated over the whole tree by the warp (3 tree passes per
   proposal; the candidate is picked in node-id order with ballots).  RNG keys `{0x10000+2j, sweep,
   chain}` keep it reproducible.  The population schemes copy S with the tree.
 * Selection: feasibility first (sc ≤ sc_target), then the total cost; if the best chain still has
   sc > sc_target, the host repairs it with the Julia TreeSASlicer rule (slice the label occurring most
   often among the largest tensors) — `info["n_repair"]` (0 in all runs below).
-* Staging: `mode="tc+gpu2", slicing=True` keeps S through both stages.  With slice moves the default
+* Staging: `mode="tc+h100", slicing=True` keeps S through both stages.  With slice moves the default
   stage-2 start β = 1 is too hot (the population leaves the stage-1 optimum and never comes back);
   β₂ = 3 → 16 works best on sat60/sat70/grid24 (see results).
 * Output (`optimize(..., slicing=True)`): the tree dict has internal `iy` recomputed on the **sliced**
   ixs (`recompute_outputs(tree, ixs_sliced, iy_sliced)`), `info["sliced"]` lists the sliced labels with
   their original ids, and `runner_json(tree, info)` gives `{"tree", "sliced"}` for the H100 runner.
-  Per-slice tc/sc and totals (`tc_total_py = tc + |S|`, `gpu_time2_total_py = Σt × 2^|S|`) are recomputed
+  Per-slice tc/sc and totals (`tc_total_py = tc + |S|`, `h100_time_total_py = Σt × 2^|S|`) are recomputed
   with `treesa_gpu.trees` on the sliced network.
 
 ## Validation (`tests/`)
 
 * `tests/run_checks.sh` — CLI `--check` mode, 48 chains × 10 β-levels × 4 sweeps per configuration:
   **A** 6 instances (sat40, sat100, reg3_100, reg3_250, lat10, lat14) × 6 kernel variants (`seq, warp,
-  seqsm, warpsm, warp --lpc 16, warpsm --lpc 8`) × 3 energy modes (`tc, gpu, gpu2`) × {random, greedy}
+  seqsm, warpsm, warp --lpc 16, warpsm --lpc 8`) × 3 energy modes (`tc, gpu, h100`) × {random, greedy}
   init; **B** the wide label path (`--wide` on sat40/sat100/reg3_250, automatic on grid24 (576 labels)
-  and grid45 (2025 labels)) × {seq, warp} × {tc, gpu2}; **C** fixed random slice sets (8 labels per
-  chain) on sat100/reg3_250/grid24 × {seq, warp, warpsm} × {tc, gpu2}; **D** slice moves on
-  (sat100/grid24/grid28 × {warp, warpsm} × {tc, gpu2}).  Per configuration:
+  and grid45 (2025 labels)) × {seq, warp} × {tc, h100}; **C** fixed random slice sets (8 labels per
+  chain) on sat100/reg3_250/grid24 × {seq, warp, warpsm} × {tc, h100}; **D** slice moves on
+  (sat100/grid24/grid28 × {warp, warpsm} × {tc, h100}).  Per configuration:
   1. every chain is a valid tree and the **incrementally maintained labels equal a from-scratch
      recomputation from the topology** (occurrence counting) for every internal node;
   2. GPU per-chain energy kernel == host double-precision recomputation (criterion |Δlog2| < 1e-3,
@@ -152,9 +152,9 @@ the work list of the warp kernel lives in shared memory (2 bytes/node).
 * `tests/test_python.py` — `trees.complexity` == omeco `tree.complexity` on omeco greedy/TreeSA
   trees; dict↔children round trip; for all schemes/inits/modes the returned dict contains every
   leaf exactly once, its internal `iy` equals `recompute_outputs`, and the binary's tc / sc /
-  modeled times (`gpu_time`, `gpu_time_v2`) equal `treesa_gpu.trees` on the returned dict; with slicing
-  (sat60, reg3_250, grid24 × {tc, tc+gpu2}) the tree's `iy` equal `recompute_outputs(tree, ixs_sliced,
-  [])`, per-slice tc / sc / #sliced and `gpu_time_v2 × 2^|S|` equal the binary's numbers, sc ≤ target,
+  modeled times (`gpu_time`, `h100_time`) equal `treesa_gpu.trees` on the returned dict; with slicing
+  (sat60, reg3_250, grid24 × {tc, tc+h100}) the tree's `iy` equal `recompute_outputs(tree, ixs_sliced,
+  [])`, per-slice tc / sc / #sliced and `h100_time × 2^|S|` equal the binary's numbers, sc ≤ target,
   and `runner_json` round-trips.  **62/62 passed** (`tests/test_python_results.txt`).
 * Cross-GPU determinism: the H100 (sm_90a build) reproduced all 96 GPU results of the slicing
   comparison bit-for-bit (same #sliced, same modeled time) — trees do not depend on the GPU.
@@ -397,9 +397,9 @@ outcome distribution) the advantage is purely best-of-576 (indep ≈ PA).
 * lat14 / reg3_100 are launch-floor dominated (783 contractions × 4 µs = 3.1 ms of 3.2 ms), so the
   objective cannot be improved there.
 
-### Measured H100 model v2 (`gpu2`): tc-optimized vs gpu2-optimized trees
+### Measured H100 model (`h100`): tc-optimized vs h100-optimized trees
 
-`bench/gpu2_study.py`: 3-SAT α = 4.26, n = 50..70 (instance seed 1), sc_target 30, PA 576 × 50,
+`bench/h100_study.py`: 3-SAT α = 4.26, n = 50..70 (instance seed 1), sc_target 30, PA 576 × 50,
 greedy init, GPU seed 1.  "time share" splits Σt over the model's three paths (batched small /
 CUDA-core `cc` / 1-bit tensor-core `tc`); the next column counts contractions that take the
 tensor-core path with K ≥ 9 (and their share of Σt).
@@ -408,33 +408,33 @@ tensor-core path with K ≥ 9 (and their share of Σt).
 |---|---|---|---|---|---|---|---|---|
 | sat50 | omeco TreeSA default (tc) | 5.248e-03 | 36.2 | 32 | 0.00 / 0.70 / 0.30 | 0 (0.00) | (22, 3, 7, 3) cc 0.45 | 1.4 |
 | sat50 | GPU PA 576x50 [tc] | 6.153e-03 | 35.8 | 33 | 0.00 / 1.00 / 0.00 | 0 (0.00) | (23, 1, 5, 5) cc 0.53 | 0.7 |
-| sat50 | GPU PA 576x50 [gpu2] | 9.927e-03 | 37.3 | 33 | 0.00 / 0.86 / 0.14 | 0 (0.00) | (22, 8, 2, 3) cc 0.37 | 1.1 |
-| sat50 | GPU PA 576x50 [tc+gpu2] | 4.846e-03 | 36.7 | 32 | 0.00 / 0.71 / 0.29 | 1 (0.29) | (21, 5, 6, 4) cc 0.54 | 1.2 |
-| sat50 | gpu2, cold β=1..16 | 1.701e-02 | 39.0 | 34 | 0.00 / 0.66 / 0.34 | 1 (0.02) | (22, 5, 7, 4) cc 0.58 | 1.0 |
+| sat50 | GPU PA 576x50 [h100] | 9.927e-03 | 37.3 | 33 | 0.00 / 0.86 / 0.14 | 0 (0.00) | (22, 8, 2, 3) cc 0.37 | 1.1 |
+| sat50 | GPU PA 576x50 [tc+h100] | 4.846e-03 | 36.7 | 32 | 0.00 / 0.71 / 0.29 | 1 (0.29) | (21, 5, 6, 4) cc 0.54 | 1.2 |
+| sat50 | h100, cold β=1..16 | 1.701e-02 | 39.0 | 34 | 0.00 / 0.66 / 0.34 | 1 (0.02) | (22, 5, 7, 4) cc 0.58 | 1.0 |
 | sat55 | omeco TreeSA default (tc) | 2.768e-01 | 41.3 | 38 | 0.00 / 1.00 / 0.00 | 0 (0.00) | (30, 2, 3, 5) cc 0.55 | 1.6 |
 | sat55 | GPU PA 576x50 [tc] | 1.568e-01 | 40.0 | 37 | 0.00 / 1.00 / 0.00 | 0 (0.00) | (27, 8, 2, 2) cc 0.40 | 0.6 |
-| sat55 | GPU PA 576x50 [gpu2] | 2.901e-01 | 44.1 | 39 | 0.00 / 0.27 / 0.73 | 1 (0.00) | (23, 8, 5, 8) tc 0.66 | 1.1 |
-| sat55 | GPU PA 576x50 [tc+gpu2] | 5.281e-02 | 43.1 | 36 | 0.00 / 0.07 / 0.93 | 1 (0.01) | (18, 9, 9, 7) tc 0.52 | 1.3 |
-| sat55 | gpu2, cold β=1..16 | 2.514e-01 | 44.2 | 38 | 0.00 / 0.24 / 0.76 | 2 (0.17) | (24, 7, 6, 7) tc 0.60 | 1.1 |
+| sat55 | GPU PA 576x50 [h100] | 2.901e-01 | 44.1 | 39 | 0.00 / 0.27 / 0.73 | 1 (0.00) | (23, 8, 5, 8) tc 0.66 | 1.1 |
+| sat55 | GPU PA 576x50 [tc+h100] | 5.281e-02 | 43.1 | 36 | 0.00 / 0.07 / 0.93 | 1 (0.01) | (18, 9, 9, 7) tc 0.52 | 1.3 |
+| sat55 | h100, cold β=1..16 | 2.514e-01 | 44.2 | 38 | 0.00 / 0.24 / 0.76 | 2 (0.17) | (24, 7, 6, 7) tc 0.60 | 1.1 |
 | sat60 | omeco TreeSA default (tc) | 1.745e+00 | 44.6 | 40 | 0.00 / 0.90 / 0.10 | 1 (0.00) | (30, 4, 5, 5) cc 0.51 | 1.9 |
 | sat60 | GPU PA 576x50 [tc] | 1.265e+00 | 43.4 | 40 | 0.00 / 0.98 / 0.02 | 1 (0.02) | (30, 4, 2, 6) cc 0.41 | 0.7 |
-| sat60 | GPU PA 576x50 [gpu2] | 6.097e+00 | 46.9 | 42 | 0.00 / 0.78 / 0.22 | 2 (0.22) | (32, 6, 4, 4) cc 0.55 | 1.2 |
-| sat60 | GPU PA 576x50 [tc+gpu2] | 9.884e-01 | 45.1 | 40 | 0.00 / 0.59 / 0.41 | 1 (0.04) | (27, 7, 6, 4) cc 0.55 | 1.4 |
-| sat60 | gpu2, cold β=1..16 | 7.302e+00 | 52.0 | 43 | 0.00 / 0.06 / 0.94 | 3 (0.57) | (21, 10, 12, 9) tc 0.55 | 1.2 |
+| sat60 | GPU PA 576x50 [h100] | 6.097e+00 | 46.9 | 42 | 0.00 / 0.78 / 0.22 | 2 (0.22) | (32, 6, 4, 4) cc 0.55 | 1.2 |
+| sat60 | GPU PA 576x50 [tc+h100] | 9.884e-01 | 45.1 | 40 | 0.00 / 0.59 / 0.41 | 1 (0.04) | (27, 7, 6, 4) cc 0.55 | 1.4 |
+| sat60 | h100, cold β=1..16 | 7.302e+00 | 52.0 | 43 | 0.00 / 0.06 / 0.94 | 3 (0.57) | (21, 10, 12, 9) tc 0.55 | 1.2 |
 | sat65 | omeco TreeSA default (tc) | 6.783e+01 | 50.2 | 46 | 0.00 / 1.00 / 0.00 | 1 (0.00) | (29, 11, 4, 6) cc 0.67 | 2.1 |
 | sat65 | GPU PA 576x50 [tc] | 1.139e+01 | 46.5 | 43 | 0.00 / 0.99 / 0.01 | 1 (0.01) | (33, 2, 8, 2) cc 0.35 | 0.7 |
-| sat65 | GPU PA 576x50 [gpu2] | 6.946e+01 | 52.3 | 46 | 0.00 / 0.35 / 0.65 | 1 (0.01) | (31, 6, 8, 7) tc 0.48 | 1.4 |
-| sat65 | GPU PA 576x50 [tc+gpu2] | 5.105e+00 | 49.2 | 42 | 0.00 / 0.16 / 0.84 | 0 (0.00) | (27, 7, 8, 7) tc 0.58 | 1.6 |
-| sat65 | gpu2, cold β=1..16 | 9.904e+01 | 53.2 | 47 | 0.00 / 0.40 / 0.60 | 3 (0.11) | (26, 13, 6, 8) tc 0.49 | 1.4 |
+| sat65 | GPU PA 576x50 [h100] | 6.946e+01 | 52.3 | 46 | 0.00 / 0.35 / 0.65 | 1 (0.01) | (31, 6, 8, 7) tc 0.48 | 1.4 |
+| sat65 | GPU PA 576x50 [tc+h100] | 5.105e+00 | 49.2 | 42 | 0.00 / 0.16 / 0.84 | 0 (0.00) | (27, 7, 8, 7) tc 0.58 | 1.6 |
+| sat65 | h100, cold β=1..16 | 9.904e+01 | 53.2 | 47 | 0.00 / 0.40 / 0.60 | 3 (0.11) | (26, 13, 6, 8) tc 0.49 | 1.4 |
 | sat70 | omeco TreeSA default (tc) | 4.504e+02 | 52.9 | 49 | 0.00 / 0.59 / 0.41 | 2 (0.02) | (33, 9, 3, 7) tc 0.38 | 2.2 |
 | sat70 | GPU PA 576x50 [tc] | 6.700e+01 | 49.6 | 46 | 0.00 / 1.00 / 0.00 | 1 (0.00) | (33, 3, 9, 4) cc 0.53 | 0.8 |
-| sat70 | GPU PA 576x50 [gpu2] | 1.154e+03 | 57.1 | 50 | 0.00 / 0.12 / 0.88 | 1 (0.00) | (34, 7, 9, 7) tc 0.59 | 1.5 |
-| sat70 | GPU PA 576x50 [tc+gpu2] | 6.623e+01 | 50.7 | 45 | 0.00 / 0.80 / 0.20 | 2 (0.02) | (35, 5, 5, 5) cc 0.70 | 1.7 |
-| sat70 | gpu2, cold β=1..16 | 9.127e+02 | 57.0 | 50 | 0.00 / 0.10 / 0.90 | 2 (0.01) | (32, 10, 8, 7) tc 0.54 | 1.4 |
+| sat70 | GPU PA 576x50 [h100] | 1.154e+03 | 57.1 | 50 | 0.00 / 0.12 / 0.88 | 1 (0.00) | (34, 7, 9, 7) tc 0.59 | 1.5 |
+| sat70 | GPU PA 576x50 [tc+h100] | 6.623e+01 | 50.7 | 45 | 0.00 / 0.80 / 0.20 | 2 (0.02) | (35, 5, 5, 5) cc 0.70 | 1.7 |
+| sat70 | h100, cold β=1..16 | 9.127e+02 | 57.0 | 50 | 0.00 / 0.10 / 0.90 | 2 (0.01) | (32, 10, 8, 7) tc 0.54 | 1.4 |
 
-Stage-2 schedule check (`bench/results/gpu2_stage2_schedules.md`; Σt in s, 2 GPU seeds):
+Stage-2 schedule check (`bench/results/h100_stage2_schedules.md`; Σt in s, 2 GPU seeds):
 
-| instance | seed | tc only | tc+gpu2 β2=0.3..16 | β2=1..16 | β2=3..16 | β2=1..16, niters 200 |
+| instance | seed | tc only | tc+h100 β2=0.3..16 | β2=1..16 | β2=3..16 | β2=1..16, niters 200 |
 |---|---|---|---|---|---|---|
 | sat60 | 1 | 1.26 | 1.26 (stage1 1.26, K≥9 tc: 1) | 0.988 (stage1 1.26, K≥9 tc: 1) | 0.802 (stage1 1.26, K≥9 tc: 1) | 0.756 (stage1 1.26, K≥9 tc: 2) |
 | sat60 | 2 | 1.03 | 1.03 (stage1 1.03, K≥9 tc: 1) | 0.463 (stage1 1.03, K≥9 tc: 0) | 0.491 (stage1 1.03, K≥9 tc: 1) | 0.499 (stage1 1.03, K≥9 tc: 1) |
@@ -443,12 +443,12 @@ Stage-2 schedule check (`bench/results/gpu2_stage2_schedules.md`; Σt in s, 2 GP
 | sat70 | 1 | 67 | 67 (stage1 67, K≥9 tc: 1) | 66.2 (stage1 67, K≥9 tc: 2) | 65.7 (stage1 67, K≥9 tc: 2) | 64.5 (stage1 67, K≥9 tc: 1) |
 | sat70 | 2 | 64.4 | 64.4 (stage1 64.4, K≥9 tc: 1) | 43.5 (stage1 64.4, K≥9 tc: 1) | 42.4 (stage1 64.4, K≥9 tc: 1) | 41.6 (stage1 64.4, K≥9 tc: 1) |
 
-* **`tc+gpu2` lowers the modeled time vs the tc-optimized tree by 1.0–3.1×** (β₂ starting at 1–3;
+* **`tc+h100` lowers the modeled time vs the tc-optimized tree by 1.0–3.1×** (β₂ starting at 1–3;
   a 4× longer stage 2 adds little; β₂ from 0.3 is too hot and returns the stage-1 incumbent), and
   vs omeco's default tree by 1.1–13×, mostly thanks to the stronger tc annealing.
-* **`gpu2` alone is worse than plain `tc`** (e.g. sat70: 1154 s vs 67 s; also from a cold start),
+* **`h100` alone is worse than plain `tc`** (e.g. sat70: 1154 s vs 67 s; also from a cold start),
   the same flat-landscape problem as `gpu`.
-* **The hoped-for many large-K tensor-core contractions do not appear**: `tc+gpu2` does move time
+* **The hoped-for many large-K tensor-core contractions do not appear**: `tc+h100` does move time
   onto the tensor-core path (sat55: 93 %, sat65: 84 %), but via contractions with K = 7–8;
   contractions with K ≥ 9 on the tensor-core path stay at 0–2 per tree under every schedule.  The
   dominant contractions of these SAT trees are batch-heavy (B = 21–35, K ≤ 9), consistent with
@@ -459,17 +459,17 @@ Stage-2 schedule check (`bench/results/gpu2_stage2_schedules.md`; Σt in s, 2 GP
 Instances: random 3-SAT n = 60, 70, 80 (α = 4.26, seed 1) and `booltn.satgen.grid_ksat(L, 3.0, 3, 1, seed=1)` for
 L = 22, 24, 28 (1452 / 1728 / 2352 clauses, 484 / 576 / 784 labels — the latter two use the wide path).
 sc_target T ∈ {30, 34, 36, 37}.  Every number is recomputed with `treesa_gpu.trees` on the sliced network:
-**modeled time = `tree_gpu_time_v2` per slice × 2^#sliced** (the measured H100 model).  Methods:
+**modeled time = `tree_h100_time` per slice × 2^#sliced** (the measured H100 model).  Methods:
 * `existing trees/` — the trees already in `trees/` (repository root) for the same instance/target (where present);
 * omeco `TreeSA()` (default: 10 trials × 300 β × 50 sweeps) + `slice_code(TreeSASlicer())`, both with
   `ScoreFunction(sc_target=T)`;
 * GPU TreeSA unsliced (PA, 576 chains × 20 sweeps/level, `sc_target=T`) followed by
-  `booltn.slicer.greedy_slice(tree, ixs, T, kind="gpu")`, for modes `tc` and `tc+gpu2`;
-* GPU TreeSA with in-annealer slicing, same budget, `slice_every=2`, modes `tc` and `tc+gpu2`
+  `booltn.slicer.greedy_slice(tree, ixs, T, kind="gpu")`, for modes `tc` and `tc+h100`;
+* GPU TreeSA with in-annealer slicing, same budget, `slice_every=2`, modes `tc` and `tc+h100`
   (stage 2: β = 3 → 16).
 Single runs, GPU seed 1.  Cells: modeled total time in s (#sliced); best per row in bold.
 
-| instance | T | existing `trees/` | omeco TreeSA + slice_code | GPU tc → greedy_slice | GPU tc+gpu2 → greedy_slice | GPU tc, in-annealer slicing | **GPU tc+gpu2, in-annealer slicing** |
+| instance | T | existing `trees/` | omeco TreeSA + slice_code | GPU tc → greedy_slice | GPU tc+h100 → greedy_slice | GPU tc, in-annealer slicing | **GPU tc+h100, in-annealer slicing** |
 |---|---|---|---|---|---|---|---|
 | sat60 | 30 | 9.64 (13) | 1.8 (10) | 2.39 (10) | 1.2 (10) | 0.781 (9) | **0.514 (9)** |
 | sat60 | 34 | 3.12 (8) | 4.66 (8) | 2.32 (7) | 1.83 (6) | 0.82 (5) | **0.685 (5)** |
@@ -496,20 +496,20 @@ Single runs, GPU seed 1.  Cells: modeled total time in s (#sliced); best per row
 | grid28 | 36 | - | 1.1e+04 (14) | 2.73e+03 (11) | 1.05e+04 (15) | 1.24e+04 (15) | **776 (11)** |
 | grid28 | 37 | - | 6.47e+04 (15) | 9.49e+03 (13) | 2.06e+03 (12) | 5.47e+03 (12) | **686 (10)** |
 
-* **`tc+gpu2` with in-annealer slicing is the best method in 19/24 cases** and within 1.58× of the best
+* **`tc+h100` with in-annealer slicing is the best method in 19/24 cases** and within 1.58× of the best
   in all; geometric mean 1.04× the best (`bench/results/slicing_summary.md`).  Against the best of
   three omeco variants (ccmlin078 32 threads; worker7273 96 threads with ntrials 10 and 96) it is
   better in every case, by 1.5× (min), 5.8× (median), 341× (max), 7.2× (geometric mean).
-* The remaining 5 wins are greedy_slice on the *unsliced* tc+gpu2 GPU tree (grid22 T = 34–37, where all
-  GPU gpu2 trees need 0 slices and differ by < 5 %, and grid24 T = 37: 0.62 vs 0.98 s).
+* The remaining 5 wins are greedy_slice on the *unsliced* tc+h100 GPU tree (grid22 T = 34–37, where all
+  GPU h100 trees need 0 slices and differ by < 5 %, and grid24 T = 37: 0.62 vs 0.98 s).
 * In-annealer slicing with the `tc` energy finds the lowest *total tc* (e.g. sat70 T=30: 48.8 vs
   49.6–52.1 for the others, grid28 T=30: 64.3 vs 65.0–71.9) but often over-slices (sc below target): in the H100 model every
-  slice re-pays the launch/permute overheads, so for wall time the `gpu2` energy must drive slicing.
+  slice re-pays the launch/permute overheads, so for wall time the `h100` energy must drive slicing.
 * Greedy repair (Julia rule) was never needed (sc ≤ T reached by the annealer in all 48 runs), and the
   kernel's internal per-slice tc / sc / #sliced / modeled time equal the `treesa_gpu.trees` recomputation
   in 48/48 runs.
 
-**Wall time by machine** (same runs; GPU = in-annealer `tc+gpu2`; H100 runs used `flock`, the trees are
+**Wall time by machine** (same runs; GPU = in-annealer `tc+h100`; H100 runs used `flock`, the trees are
 bit-identical to the RTX 6000 ones; omeco cells: modeled time / wall):
 
 | instance | T | RTX 6000 wall | H100 wall | omeco ccmlin078 (32 thr) modeled / wall | omeco worker7273 (96 thr) ntrials=10 | ntrials=96 |
@@ -532,7 +532,7 @@ bit-identical to the RTX 6000 ones; omeco cells: modeled time / wall):
   as long as omeco on the 96-core node or longer (H100 7–21 s, RTX 6000 15–51 s, omeco 6–21 s) — but
   finds 1.5–340× lower modeled time than the best omeco variant.
 
-**Matched wall time on the grids** (H100, in-annealer `tc+gpu2`, shorter schedules; modeled time / wall):
+**Matched wall time on the grids** (H100, in-annealer `tc+h100`, shorter schedules; modeled time / wall):
 
 | instance | T | GPU H100 niters=5 | niters=10 | niters=20 | omeco worker7273 96 thr, ntrials=10 | ntrials=96 |
 |---|---|---|---|---|---|---|
@@ -555,9 +555,9 @@ bit-identical to the RTX 6000 ones; omeco cells: modeled time / wall):
 
 ### Saved trees for the H100 runner (`trees/gpusa_slice/` (repository root))
 
-`<name>_sc<T>_tc.json` / `_gpu2.json`: in-annealer slicing runs of the comparison (seed 1);
+`<name>_sc<T>_tc.json` / `_h100.json`: in-annealer slicing runs of the comparison (seed 1);
 `<name>_sc<T>_best.json`: the best feasible (sc ≤ T) tree for that instance and target among all my
-runs — the comparison runs, extra seeds 2–4 of `tc+gpu2` in-annealer slicing for T = 36, 37
+runs — the comparison runs, extra seeds 2–4 of `tc+h100` in-annealer slicing for T = 36, 37
 (`bench/extra_seeds.py`; seed spread is large, e.g. grid28 T=37: 444–1977 s), and trees found for a
 smaller T (feasible for a larger one).  Format `{"tree", "sliced"}`: internal `iy` computed on the ixs
 with the sliced labels removed (`recompute_outputs(tree, ixs_sliced, [])`), `sliced` = original label
@@ -598,8 +598,8 @@ by recomputing the existing trees' `iy`).
   as long as or longer than omeco TreeSA + slice_code on 96 cores (H100 7–21 s vs 6–21 s; RTX 6000
   15–51 s) — it wins on modeled time, not on optimizer wall time; at matched wall time omeco wins
   grid24 T = 36.
-* **Slicing with the `tc` energy** is worse than every `gpu2`-aware method for the H100 objective
-  (over-slicing), and `tc+gpu2` with the default stage-2 start β = 1 returned the stage-1 tree.
+* **Slicing with the `tc` energy** is worse than every `h100`-aware method for the H100 objective
+  (over-slicing), and `tc+h100` with the default stage-2 start β = 1 returned the stage-1 tree.
 * **Easy / saturated instances** (reg3_100, lat14): every method reaches the same tc; the GPU's
   ~0.3 s process + context start-up makes it no faster than omeco (reg3_100: 0.3 s vs 0.4 s; lat14
   equal quality, omeco default's tree even has sc 22 vs 23).
@@ -609,7 +609,7 @@ by recomputing the existing trees' `iy`).
   sweeps/s, slower than one CPU core (4.4e3); with ≤ 2304 chains a GPU chain is faster than a core
   (8.4e3 at 2304, 3.2e4 at 576, 4.5e4 at 72 sweeps/s).  Long single trajectories are not what the GPU is good at.
 * **PA hurts on rugged instances where best-of-N matters** (reg3_250, above); use `indep` there.
-* **`mode="gpu"` / `"gpu2"` from scratch** (above); and `tc+gpu2` gains only 1.0–3.1× over plain `tc`
+* **`mode="gpu"` / `"h100"` from scratch** (above); and `tc+h100` gains only 1.0–3.1× over plain `tc`
   trees in the measured model.
 * The timings are single runs; omeco has no Python seed, so its run-to-run variance is unmeasured.
 
@@ -630,7 +630,7 @@ by recomputing the existing trees' `iy`).
   tree moves), proposals only add labels of the *largest* internal tensors, and each proposal costs 3
   full-tree passes (`slice_every=2` adds ~50 % run time).  The default stage-2 start β = 1 is too hot
   when slicing; use β₂ from ~3 (as in the benchmarks).  In-annealer slicing with the `tc` energy
-  over-slices for the H100 objective; use `tc+gpu2`.  Results are single seeds and noisy (see the
+  over-slices for the H100 objective; use `tc+h100`.  Results are single seeds and noisy (see the
   matched-time table); sc_target is enforced by selection + repair, not by the annealing itself.
 * omeco baselines are not reproducible across machines (same config, different results on ccmlin078
   and worker7273, e.g. sat70 T=30: 744 vs 355 s modeled), so treat single omeco numbers as one sample.
@@ -641,8 +641,8 @@ by recomputing the existing trees' `iy`).
   use Julia's local surrogate `dtc` (not a Δ of that global energy), so PA here is a heuristic
   selection scheme, not an unbiased sampler.  It loses diversity: by the end, the population
   typically descends from a single initial chain.
-* `mode="gpu"`/`"gpu2"` on their own get stuck; use `mode="tc+gpu"`/`"tc+gpu2"`.  The GPU cost model is
-  taken as given from `trees.gpu_time` / `gpu_time_v2`; v1 heavily penalizes batched (B-heavy) small-M/N/K
+* `mode="gpu"`/`"h100"` on their own get stuck; use `mode="tc+gpu"`/`"tc+h100"`.  The GPU cost model is
+  taken as given from `trees.gpu_time` / `h100_time`; v1 heavily penalizes batched (B-heavy) small-M/N/K
   contractions through the tile padding `m0, n0, k0`.
 * The Python wrapper starts a process per call (CUDA context + file I/O ≈ 0.25–0.35 s), which
   dominates for small instances.  The best tree is tracked at β-level boundaries only.
@@ -665,11 +665,11 @@ by recomputing the existing trees' `iy`).
 | `bench/instances.py` | random 3-SAT (copy of `booltn.satgen`), omeco `reg3_*` graphs, lattice-local 3-SAT generator |
 | `bench/throughput.py` | kernel-mapping throughput benchmark |
 | `bench/compare.py`, `bench/summarize.py` | omeco vs GPU quality/wallclock benchmark and tables |
-| `bench/gpu2_study.py` | tc vs gpu2 (measured H100 model) study → `bench/results/gpu2_study.md` |
+| `bench/h100_study.py` | tc vs h100 (measured H100 model) study → `bench/results/h100_study.md` |
 | `bench/slicing_compare.py`, `bench/summarize_slicing.py` | slicing comparison (omeco + slice_code / greedy_slice / in-annealer) on any host, tables → `bench/results/slicing_summary.md` |
 | `bench/save_best.py`, `bench/extra_seeds.py` | best trees per instance/target → `trees/gpusa_slice/` (repository root) |
-| `trees/gpusa_slice/` (repository root) | `<name>_sc<T>_{tc,gpu2,best}.json` = `{"tree", "sliced"}` (tree iy on the sliced ixs, sliced = original labels), metrics in `index.json` |
-| `bench/results/` | raw results (`compare.jsonl`, `slicing_compare{,_h100,_worker7273}.jsonl`, `throughput_rtx6000.txt`, `throughput_vs_W_{rtx6000,h100}.txt`, `gpu2_*.md`, logs) and summaries |
+| `trees/gpusa_slice/` (repository root) | `<name>_sc<T>_{tc,h100,best}.json` = `{"tree", "sliced"}` (tree iy on the sliced ixs, sliced = original labels), metrics in `index.json` |
+| `bench/results/` | raw results (`compare.jsonl`, `slicing_compare{,_h100,_worker7273}.jsonl`, `throughput_rtx6000.txt`, `throughput_vs_W_{rtx6000,h100}.txt`, `h100_*.md`, logs) and summaries |
 
 ## How to run
 
@@ -683,7 +683,7 @@ python bench/compare.py --suite omeco   # CPU baselines  (RAYON_NUM_THREADS set 
 python bench/compare.py --suite gpu     # GPU configurations
 python bench/compare.py --suite gpumode # GPU-runtime objective
 python bench/summarize.py > bench/results/summary.md
-python bench/gpu2_study.py > bench/results/gpu2_study.md  # measured H100 model v2
+python bench/h100_study.py > bench/results/h100_study.md  # measured H100 model
 python bench/slicing_compare.py                            # slicing comparison (saves trees)
 python bench/summarize_slicing.py > bench/results/slicing_summary.md
 python bench/save_best.py                                  # *_best.json in booltn-gpu/trees/gpusa_slice
@@ -692,10 +692,10 @@ python bench/save_best.py                                  # *_best.json in bool
 #   TREESA_GPU_BINARY=$PWD/treesa_gpu/bin/treesa_gpu_sm90 TREESA_GPU_LOCK=/tmp/booltn_gpu.lock python bench/...
 # CLI example (sliced, H100 objective):
 treesa_gpu/bin/treesa_gpu -i tests/data/grid24.txt --tree tests/data/grid24.tree --nchains 576 --niters 20 \
-    --sc-target 36 --scheme pa --slicing --slice-every 2 --stage2-betas 3:0.0434:16 --stage2-mode gpu2 \
+    --sc-target 36 --scheme pa --slicing --slice-every 2 --stage2-betas 3:0.0434:16 --stage2-mode h100 \
     --out result.json
 # Python: tree, info = treesa_gpu.optimize(ixs, iy, nchains=576, niters=20, sc_target=36, scheme="pa",
-#             mode="tc+gpu2", slicing=True, slice_every=2, stage2_betas=[3 + 13*i/299 for i in range(300)])
+#             mode="tc+h100", slicing=True, slice_every=2, stage2_betas=[3 + 13*i/299 for i in range(300)])
 #         json.dump(treesa_gpu.runner_json(tree, info), open("tree.json", "w"))
 ```
 

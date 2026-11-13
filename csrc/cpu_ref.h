@@ -37,7 +37,7 @@ static inline void ref_tcsc(const std::vector<int>& l1, const std::vector<int>& 
     if (!sl[l] && has(l2, l) && !has(l3, l)) tc += 1;
 }
 
-// GPU-model cost of (x,y)->z from vector label sets (MODE 1: model v1, MODE 2: measured model v2).
+// GPU-model cost of (x,y)->z from vector label sets (MODE 1: model v1, MODE 2: measured H100 model).
 template <int MODE>
 static inline float ref_gpu_cost(const std::vector<int>& x, const std::vector<int>& y, const std::vector<int>& z,
                                  const std::vector<char>& sl, const Params& P) {
@@ -51,7 +51,7 @@ static inline float ref_gpu_cost(const std::vector<int>& x, const std::vector<in
   }
   for (int l : x)
     if (!sl[l] && has(y, l) && !has(z, l)) K++;
-  return MODE == 1 ? gpu_lt(B, M, N, K, P) : gpu2_lt(B, M, N, K, P);
+  return MODE == 1 ? gpu_lt(B, M, N, K, P) : h100_lt(B, M, N, K, P);
 }
 
 // Julia `abcacb(a, b, ab, c, d)`: returns dE pieces; `ac` = new labels of the (a,c) node.

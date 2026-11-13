@@ -75,7 +75,7 @@ struct Params {
   //           (2^(B+M+K)+2^(B+N+K)+2^(B+M+N)) / bw) + launch
   float lpeak, lbw, llaunch;
   int m0, n0, k0;
-  // Measured H100 model v2 (mode 2, tree_utils.gpu_time_v2), log2 of the constants:
+  // Measured H100 model (mode 2 = "h100", trees.h100_time), log2 of the constants:
   //   small (B+M+N <= small_rank):  t = small_cell * 2^(B+M+N+K)
   //   else: t = 3*launch + 2(a+b)/perm_bw + min(cc, tc),  a=2^(B+M+K), b=2^(B+N+K), c=2^(B+M+N)
   //         cc = cc_bit*(a+b+c) + cc_cell*2^(B+M+N+K)
@@ -126,8 +126,8 @@ HD float gpu_lt(int B, int M, int N, int K, const Params& P) {
   return lse_f(lt, P.llaunch);
 }
 
-// log2 of modeled time, measured H100 model v2 (see Params).
-HD float gpu2_lt(int B, int M, int N, int K, const Params& P) {
+// log2 of modeled time, measured H100 model (see Params).
+HD float h100_lt(int B, int M, int N, int K, const Params& P) {
   if (B + M + N <= P.v2_small_rank) return P.v2_lsmall_cell + (float)(B + M + N + K);
   float la = (float)(B + M + K), lb = (float)(B + N + K), lc = (float)(B + M + N);
   float lab = lse_f(la, lb), lmoved = lse_f(lab, lc);
@@ -147,11 +147,11 @@ HD float gpu2_lt(int B, int M, int N, int K, const Params& P) {
 // Cost (log2) of the contraction:
 //   MODE 0:  tc = |z| + |x & y & ~z|                 (Julia `tcscrw`)
 //   MODE 1:  log2 t(B, M, N, K) of the GPU model v1
-//   MODE 2:  log2 t(B, M, N, K) of the measured H100 model v2
+//   MODE 2:  log2 t(B, M, N, K) of the measured H100 model
 template <int MODE>
 HD float node_cost(int B, int M, int N, int K, int Z, const Params& P) {
   if (MODE == 0) return (float)(Z + K);
-  return MODE == 1 ? gpu_lt(B, M, N, K, P) : gpu2_lt(B, M, N, K, P);
+  return MODE == 1 ? gpu_lt(B, M, N, K, P) : h100_lt(B, M, N, K, P);
 }
 
 // Accumulators for one TreeSA proposal: sizes of d, P, X and the counts of the four

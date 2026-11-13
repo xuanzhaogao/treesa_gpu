@@ -1,4 +1,4 @@
-"""Extra seeds of GPU TreeSA (tc+gpu2, in-annealer slicing, PA 576 x 20) for the sc targets the H100 engine
+"""Extra seeds of GPU TreeSA (tc+h100, in-annealer slicing, PA 576 x 20) for the sc targets the H100 engine
 runs (36, 37).  Candidate trees go to bench/results/candidates/; `--update-best` then replaces
 booltn-gpu/trees/gpusa_slice/<name>_sc<T>_best.json when a candidate has a lower modeled total time.
 
@@ -39,10 +39,10 @@ def main():
             meta = json.load(open(fn[:-5] + ".meta.json"))
             name, T = meta["name"], meta["sc_target"]
             best = f"{name}_sc{T}_best.json"
-            if meta["sc"] <= T and meta["gpu2_total"] < index[best]["gpu2_total"]:
-                print(f"{best}: {index[best]['gpu2_total']:.4g} -> {meta['gpu2_total']:.4g} s (seed {meta['seed']})")
+            if meta["sc"] <= T and meta["h100_total"] < index[best]["h100_total"]:
+                print(f"{best}: {index[best]['h100_total']:.4g} -> {meta['h100_total']:.4g} s (seed {meta['seed']})")
                 shutil.copyfile(fn, os.path.join(sc.OUTDIR, best))
-                index[best] = dict(meta, method=f"GPU tc+gpu2 + in-annealer slicing (seed {meta['seed']})")
+                index[best] = dict(meta, method=f"GPU tc+h100 + in-annealer slicing (seed {meta['seed']})")
         with open(idx_path, "w") as f:
             json.dump(index, f, indent=1, sort_keys=True)
         return
@@ -53,14 +53,14 @@ def main():
             for seed in map(int, a.seeds.split(",")):
                 gpu = dict(sc.GPU, seed=seed)
                 t0 = time.time()
-                tree, info = tg.optimize(ixs, iy, sc_target=T, mode="tc+gpu2", slicing=True, slice_every=2,
+                tree, info = tg.optimize(ixs, iy, sc_target=T, mode="tc+h100", slicing=True, slice_every=2,
                                          stage2_betas=sc.STAGE2, **gpu)
                 wall = time.time() - t0
                 d, mt = sc.evaluate(tree, info["sliced"], ixs)
-                base = os.path.join(CAND, f"{sc.NAMES[inst]}_sc{T}_gpu2_seed{seed}")
+                base = os.path.join(CAND, f"{sc.NAMES[inst]}_sc{T}_h100_seed{seed}")
                 with open(base + ".json", "w") as f:
                     json.dump({"tree": d, "sliced": info["sliced"]}, f)
-                meta = dict(mt, name=sc.NAMES[inst], instance=inst, sc_target=T, seed=seed, mode="tc+gpu2", gpu=gpu,
+                meta = dict(mt, name=sc.NAMES[inst], instance=inst, sc_target=T, seed=seed, mode="tc+h100", gpu=gpu,
                             wall=wall, host=sc.HOST)
                 with open(base + ".meta.json", "w") as f:
                     json.dump(meta, f)

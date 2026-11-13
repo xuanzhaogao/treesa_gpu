@@ -1,0 +1,1 @@
+{"nsliced": 3, "tc": 41.46512638703178, "sc": 37, "tc_total": 44.46512638703178, "h100_slice": 0.09875369496710587, "h100_total": 0.790029559736847, "name": "r3sat_n60_s1", "instance": "sat60", "sc_target": 37, "seed": 2, "mode": "tc+h100", "gpu": {"nchains": 576, "niters": 20, "scheme": "pa", "seed": 2}, "wall": 1.0062670707702637, "host": "workergpu165"}

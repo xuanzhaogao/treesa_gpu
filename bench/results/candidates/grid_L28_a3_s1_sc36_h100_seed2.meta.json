@@ -1,0 +1,1 @@
+{"nsliced": 11, "tc": 53.1550301687825, "sc": 36, "tc_total": 64.1550301687825, "h100_slice": 0.9644384273476807, "h100_total": 1975.16989920805, "name": "grid_L28_a3_s1", "instance": "grid28", "sc_target": 36, "seed": 2, "mode": "tc+h100", "gpu": {"nchains": 576, "niters": 20, "scheme": "pa", "seed": 2}, "wall": 51.29226756095886, "host": "ccmlin078"}

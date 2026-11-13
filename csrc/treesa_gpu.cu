@@ -690,7 +690,7 @@ struct HostEnergy {
   double tc = 0;     // log2 sum_v 2^tc(v)            (per slice)
   int sc = 0;        // max tensor size (log2), leaves included (per slice)
   double time = 0;   // sum_v t(B,M,N,K)  GPU model v1, seconds (per slice)
-  double time2 = 0;  // sum_v t(B,M,N,K)  measured H100 model v2, seconds (per slice)
+  double time2 = 0;  // sum_v t(B,M,N,K)  measured H100 model, seconds (per slice)
   int ns = 0;        // |S|
 };
 
@@ -700,8 +700,8 @@ static double gpu_time_d(int B, int M, int N, int K, const Params& P) {
   return std::max(ops / std::exp2((double)P.lpeak), bits / std::exp2((double)P.lbw)) + std::exp2((double)P.llaunch);
 }
 
-// Double-precision mirror of tree_utils.gpu_time_v2 (constants recovered from the log2 params).
-static double gpu_time_v2_d(int B, int M, int N, int K, const Params& P) {
+// Double-precision mirror of tree_utils.h100_time (constants recovered from the log2 params).
+static double h100_time_d(int B, int M, int N, int K, const Params& P) {
   auto e = [](float l) { return std::exp2((double)l); };
   if (B + M + N <= P.v2_small_rank) return e(P.v2_lsmall_cell) * std::exp2((double)(B + M + N + K));
   double a = std::exp2((double)(B + M + K)), b = std::exp2((double)(B + N + K)), c = std::exp2((double)(B + M + N));
@@ -750,7 +750,7 @@ static HostEnergy host_energy(const Inst& I, int NW, const Params& P, const uint
     mx = std::max(mx, t);
     E.sc = std::max(E.sc, sz);
     E.time += gpu_time_d(B, M, N, K, P);
-    E.time2 += gpu_time_v2_d(B, M, N, K, P);
+    E.time2 += h100_time_d(B, M, N, K, P);
   }
   double s = 0;
   for (double t : tcs) s += std::exp2(t - mx);
@@ -802,10 +802,10 @@ struct Opts {
   double sc_target = 20.0, sc_weight = 1.0, trunc_frac = 0.25;
   uint64_t seed = 1;
   double gm[6] = {11.9e15, 1.6e13, 6, 6, 8, 4e-6};  // peak ops/s, bw bits/s, m0, n0, k0, launch s
-  // model v2 (tree_utils.GPU_MODEL_V2): launch, perm_bw_bits, cc_bit, cc_cell, tc_bit, tc_pad_cell,
+  // H100 model (trees.H100_MODEL): launch, perm_bw_bits, cc_bit, cc_cell, tc_bit, tc_pad_cell,
   // tc_out_bit, small_rank, small_cell
-  double gm2[9] = {4e-6, 8.0e12, 6.25e-14, 1.97e-14, 2.78e-14, 7.6e-17, 2.14e-13, 14, 1e-12};
-  int mode2 = 1;  // energy mode of stage 2 (1 = gpu, 2 = gpu2)
+  double h100m[9] = {4e-6, 8.0e12, 6.25e-14, 1.97e-14, 2.78e-14, 7.6e-17, 2.14e-13, 14, 1e-12};
+  int mode2 = 1;  // energy mode of stage 2 (1 = gpu, 2 = h100)
   int max_levels = -1;
 };
 
@@ -842,9 +842,9 @@ static std::vector<float> parse_betas(const std::string& s) {
 static void usage() {
   fprintf(stderr,
           "usage: treesa_gpu -i instance.txt [--tree init_tree.txt] [--nchains N] [--niters K]\n"
-          "  [--betas a:step:b | --betas file:PATH | --betas b1,b2,..] [--mode tc|gpu|gpu2]\n"
-          "  [--gm peak,bw,m0,n0,k0,launch] [--gm2 launch,perm_bw,cc_bit,cc_cell,tc_bit,tc_pad,tc_out,small_rank,small_cell]\n"
-          "  [--stage2-betas SPEC [--stage2-niters K] [--stage2-mode gpu|gpu2]]  (continue the population)\n"
+          "  [--betas a:step:b | --betas file:PATH | --betas b1,b2,..] [--mode tc|gpu|h100]\n"
+          "  [--gm peak,bw,m0,n0,k0,launch] [--h100-model launch,perm_bw,cc_bit,cc_cell,tc_bit,tc_pad,tc_out,small_rank,small_cell]\n"
+          "  [--stage2-betas SPEC [--stage2-niters K] [--stage2-mode gpu|h100]]  (continue the population)\n"
           "  [--sc-target x] [--sc-weight y] [--scheme indep|pa|trunc] [--trunc-frac f]\n"
           "  [--slicing [--slice-moves k] [--slice-every s] [--max-slices n] [--init-slices l1,l2,..]]\n"
           "  [--kernel auto|seq|seqsm|warp|warpsm] [--lpc 32|16|8] [--wide] [--block B] [--wpb W] [--seed s]\n"
@@ -865,12 +865,12 @@ static Opts parse(int argc, char** argv) {
     else if (a == "--betas") o.betas = nx();
     else if (a == "--stage2-betas") o.betas2 = nx();
     else if (a == "--stage2-niters") o.niters2 = std::stoi(nx());
-    else if (a == "--mode") { std::string s = nx(); o.mode = (s == "gpu") ? 1 : (s == "gpu2") ? 2 : 0; }
-    else if (a == "--stage2-mode") { std::string s = nx(); o.mode2 = (s == "gpu2") ? 2 : 1; }
-    else if (a == "--gm2") {
+    else if (a == "--mode") { std::string s = nx(); o.mode = (s == "gpu") ? 1 : (s == "h100" || s == "gpu2") ? 2 : 0; }  // gpu2: old name
+    else if (a == "--stage2-mode") { std::string s = nx(); o.mode2 = (s == "h100" || s == "gpu2") ? 2 : 1; }
+    else if (a == "--h100-model" || a == "--gm2") {
       std::string s = nx();
-      if (sscanf(s.c_str(), "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf", &o.gm2[0], &o.gm2[1], &o.gm2[2], &o.gm2[3],
-                 &o.gm2[4], &o.gm2[5], &o.gm2[6], &o.gm2[7], &o.gm2[8]) != 9)
+      if (sscanf(s.c_str(), "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf", &o.h100m[0], &o.h100m[1], &o.h100m[2], &o.h100m[3],
+                 &o.h100m[4], &o.h100m[5], &o.h100m[6], &o.h100m[7], &o.h100m[8]) != 9)
         usage();
     }
     else if (a == "--sc-target") o.sc_target = std::stod(nx());
@@ -928,7 +928,7 @@ struct Runner {
   int *d_sc = nullptr, *d_ns = nullptr;
   int* d_anc = nullptr;
   std::string kernel;
-  int mode;              // current energy mode (0 tc, 1 gpu, 2 gpu2); may switch for stage 2
+  int mode;              // current energy mode (0 tc, 1 gpu, 2 h100); may switch for stage 2
   double kernel_ms = 0;  // accumulated sweep-kernel time
 
   Runner(const Inst& I_, const Opts& O_) : I(I_), O(O_) {
@@ -958,15 +958,15 @@ struct Runner {
     P.n0 = (int)O.gm[3];
     P.k0 = (int)O.gm[4];
     P.llaunch = (float)std::log2(O.gm[5]);
-    P.v2_l3launch = (float)std::log2(3 * O.gm2[0]);
-    P.v2_lperm2 = (float)std::log2(2 / O.gm2[1]);
-    P.v2_lcc_bit = (float)std::log2(O.gm2[2]);
-    P.v2_lcc_cell = (float)std::log2(O.gm2[3]);
-    P.v2_ltc_bit = (float)std::log2(O.gm2[4]);
-    P.v2_ltc_pad = (float)std::log2(O.gm2[5]);
-    P.v2_ltc_out = (float)std::log2(O.gm2[6]);
-    P.v2_small_rank = (int)O.gm2[7];
-    P.v2_lsmall_cell = (float)std::log2(O.gm2[8]);
+    P.v2_l3launch = (float)std::log2(3 * O.h100m[0]);
+    P.v2_lperm2 = (float)std::log2(2 / O.h100m[1]);
+    P.v2_lcc_bit = (float)std::log2(O.h100m[2]);
+    P.v2_lcc_cell = (float)std::log2(O.h100m[3]);
+    P.v2_ltc_bit = (float)std::log2(O.h100m[4]);
+    P.v2_ltc_pad = (float)std::log2(O.h100m[5]);
+    P.v2_ltc_out = (float)std::log2(O.h100m[6]);
+    P.v2_small_rank = (int)O.h100m[7];
+    P.v2_lsmall_cell = (float)std::log2(O.h100m[8]);
     h_leaf.assign((size_t)I.m * NW, 0);
     for (int i = 0; i < I.m; i++)
       for (int l : I.ixs[i]) h_leaf[(size_t)i * NW + (l >> 5)] |= 1u << (l & 31);
@@ -1292,9 +1292,9 @@ struct Runner {
               HE.tc, HE.sc, HE.ns, n_repair, HE.time, HE.time2, t_anneal, t_init, kernel_ms / 1e3,
               stats[0] / (kernel_ms / 1e3), stats[2] ? stats[3] / ((double)O.lpc * stats[2]) : 0.0, stats[5], stats[4]);
     FILE* f = O.out.empty() ? stdout : fopen(O.out.c_str(), "w");
-    fprintf(f, "{\"tc\": %.6f, \"sc\": %d, \"gpu_time\": %s, \"gpu_time2\": %s, \"valid\": %s, \"labels_ok\": %s, \"best_chain\": %d,\n",
+    fprintf(f, "{\"tc\": %.6f, \"sc\": %d, \"gpu_time\": %s, \"h100_time\": %s, \"valid\": %s, \"labels_ok\": %s, \"best_chain\": %d,\n",
             HE.tc, HE.sc, jnum(HE.time).c_str(), jnum(HE.time2).c_str(), valid ? "true" : "false", labels_ok ? "true" : "false", best_chain);
-    fprintf(f, " \"slicing\": %s, \"nsliced\": %d, \"n_repair\": %d, \"tc_total\": %.6f, \"gpu_time_total\": %s, \"gpu_time2_total\": %s, \"sliced\": [",
+    fprintf(f, " \"slicing\": %s, \"nsliced\": %d, \"n_repair\": %d, \"tc_total\": %.6f, \"gpu_time_total\": %s, \"h100_time_total\": %s, \"sliced\": [",
             O.slicing ? "true" : "false", HE.ns, n_repair, HE.tc + HE.ns, jnum(HE.time * std::exp2((double)HE.ns)).c_str(),
             jnum(HE.time2 * std::exp2((double)HE.ns)).c_str());
     {
@@ -1308,7 +1308,7 @@ struct Runner {
     fprintf(f, " \"nchains\": %d, \"niters\": %d, \"nlevels\": %zu, \"total_sweeps\": %u, \"W\": %d, \"nw\": %d, \"lpc\": %d, \"kernel\": \"%s\", \"scheme\": \"%s\", \"mode\": %d, \"nresample\": %d,\n",
             nchains, O.niters, betas.size(), sweep_ctr, W, NW, O.lpc, kernel.c_str(), O.scheme.c_str(), O.mode, nresample);
     if (staged)
-      fprintf(f, " \"stage1_tc\": %.6f, \"stage1_sc\": %d, \"stage1_nsliced\": %d, \"stage1_gpu_time\": %s, \"stage1_gpu_time2\": %s, \"stage1_gpu_time2_total\": %s,\n",
+      fprintf(f, " \"stage1_tc\": %.6f, \"stage1_sc\": %d, \"stage1_nsliced\": %d, \"stage1_gpu_time\": %s, \"stage1_h100_time\": %s, \"stage1_h100_time_total\": %s,\n",
               H1.tc, H1.sc, H1.ns, jnum(H1.time).c_str(), jnum(H1.time2).c_str(), jnum(H1.time2 * std::exp2((double)H1.ns)).c_str());
     fprintf(f, " \"trace_cols\": [\"t\", \"level\", \"beta\", \"best_lcost_per_slice\", \"best_sc\", \"mean_E\", \"families\", \"mode\", \"best_nsliced\", \"mean_nsliced\"],\n");
     fprintf(f, " \"trace\": [%s],\n \"tree\": [", trace.c_str());

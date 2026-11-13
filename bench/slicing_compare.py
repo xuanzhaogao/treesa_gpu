@@ -4,8 +4,8 @@ Also evaluates the existing trees in booltn-gpu/trees/ for the same instance and
 
 All numbers are recomputed with treesa_gpu.trees on the sliced network (ixs with sliced labels removed):
 per-slice tc / sc, #sliced, total tc = per-slice tc + #sliced, modeled total H100 time =
-tree_gpu_time_v2 x 2^#sliced.  Trees of the in-annealer runs are saved to
-booltn-gpu/trees/gpusa_slice/<name>_sc<T>_<tc|gpu2>.json as {"tree", "sliced"} (iy on the sliced ixs).
+tree_h100_time x 2^#sliced.  Trees of the in-annealer runs are saved to
+booltn-gpu/trees/gpusa_slice/<name>_sc<T>_<tc|h100>.json as {"tree", "sliced"} (iy on the sliced ixs).
 
     python bench/slicing_compare.py [--instances ...] [--targets 30,34,36,37] > log
 """
@@ -31,7 +31,7 @@ HOST = os.uname().nodename.split(".")[0]
 NAMES = {"sat60": "r3sat_n60_s1", "sat70": "r3sat_n70_s1", "sat80": "r3sat_n80_s1",
          "grid22": "grid_L22_a3_s1", "grid24": "grid_L24_a3_s1", "grid28": "grid_L28_a3_s1"}
 GPU = dict(nchains=576, niters=20, scheme="pa", seed=1)
-# stage-2 schedule for tc+gpu2: beta 3 -> 16 (300 levels); beta 1 was too hot with slice moves
+# stage-2 schedule for tc+h100: beta 3 -> 16 (300 levels); beta 1 was too hot with slice moves
 STAGE2 = [3.0 + 13.0 * i / 299 for i in range(300)]
 
 
@@ -41,8 +41,8 @@ def evaluate(tree, sliced, ixs):
     d = tu.recompute_outputs(tree, ixs_s, [])
     assert sorted(tu.leaf_ids(d)) == list(range(len(ixs)))
     tc, sc = tu.complexity(d, ixs_s)
-    t2 = tu.tree_gpu_time_v2(d, ixs_s)
-    return d, dict(nsliced=len(sl), tc=tc, sc=sc, tc_total=tc + len(sl), gpu2_slice=t2, gpu2_total=t2 * 2.0 ** len(sl))
+    t2 = tu.tree_h100_time(d, ixs_s)
+    return d, dict(nsliced=len(sl), tc=tc, sc=sc, tc_total=tc + len(sl), h100_slice=t2, h100_total=t2 * 2.0 ** len(sl))
 
 
 def omeco_worker(inst, T, ntrials=10):
@@ -91,7 +91,7 @@ def main():
     ap.add_argument("--omeco-worker")
     ap.add_argument("--instances", default="sat60,sat70,sat80,grid22,grid24,grid28")
     ap.add_argument("--targets", default="30,34,36,37")
-    ap.add_argument("--methods", default="existing,omeco,greedy_tc,greedy_tcgpu2,slice_tc,slice_tcgpu2")
+    ap.add_argument("--methods", default="existing,omeco,greedy_tc,greedy_tch100,slice_tc,slice_tch100")
     ap.add_argument("--out", default=None, help="results jsonl (default bench/results/slicing_compare.jsonl)")
     ap.add_argument("--no-save", action="store_true", help="do not write trees to booltn-gpu/trees/gpusa_slice")
     ap.add_argument("--omeco-trials", type=int, default=10)
@@ -125,7 +125,7 @@ def main():
                 name = "omeco TreeSA + slice_code" + ("" if a.omeco_trials == 10 else f" (ntrials={a.omeco_trials})")
                 emit(dict(base, method=name, wall=r["wall"], wall_treesa=r["wall_treesa"], wall_slicer=r["wall_slicer"],
                           threads=a.omeco_threads, **mt))
-            for key, mode in (("greedy_tc", "tc"), ("greedy_tcgpu2", "tc+gpu2")):
+            for key, mode in (("greedy_tc", "tc"), ("greedy_tch100", "tc+h100")):
                 if key not in methods:
                     continue
                 t0 = time.time()
@@ -136,7 +136,7 @@ def main():
                 _, mt = evaluate(d, sliced, ixs)
                 emit(dict(base, method=f"GPU {mode} unsliced + greedy_slice(gpu){suf}", wall=t2 - t0, wall_gpu=t1 - t0,
                           wall_slicer=t2 - t1, **mt))
-            for key, mode in (("slice_tc", "tc"), ("slice_tcgpu2", "tc+gpu2")):
+            for key, mode in (("slice_tc", "tc"), ("slice_tch100", "tc+h100")):
                 if key not in methods:
                     continue
                 t0 = time.time()
@@ -147,11 +147,11 @@ def main():
                 # kernel-internal numbers vs tree_utils recomputation
                 assert d == tree
                 ok = (abs(info["tc"] - mt["tc"]) < 1e-4 and info["sc"] == mt["sc"] and info["nsliced"] == mt["nsliced"]
-                      and abs(info["gpu_time2_total"] / mt["gpu2_total"] - 1) < 1e-5)
+                      and abs(info["h100_time_total"] / mt["h100_total"] - 1) < 1e-5)
                 emit(dict(base, method=f"GPU {mode} + in-annealer slicing{suf}", wall=wall, n_repair=info["n_repair"],
                           internal_matches_tree_utils=ok, **mt))
                 if not a.no_save:
-                    save(inst, T, "tc" if mode == "tc" else "gpu2", tree, info["sliced"],
+                    save(inst, T, "tc" if mode == "tc" else "h100", tree, info["sliced"],
                          dict(mt, mode=mode, sc_target=T, gpu=GPU, n_repair=info["n_repair"], wall=wall))
 
 
