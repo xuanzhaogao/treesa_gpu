@@ -16,7 +16,7 @@ Compared with omeco's TreeSA (Rust, multithreaded). Tables and raw data: [`docs/
 | Against omeco's heavy setting (32 trials × 200 sweeps, 10–25 s) | better trees in **1.1–2.5 s** |
 | Contraction time on an H100 ([booltn](https://github.com/xuanzhaogao/booltn)), GPU-time energy `tc+h100` | trees contract **4–64× faster** than omeco trees (grid 3-SAT L = 22: 1.24 s → 19 ms) |
 | Slicing inside the annealer | modeled total time **1.5–341× lower** than omeco TreeSA + `slice_code` (geometric mean 7.2×); random 3-SAT n = 70 measured **41.7 s** vs about 13 min projected for the omeco tree |
-| Large networks (1000–8000 tensors, RTX 6000 vs omeco on 10 threads) | **about even**: same quality-vs-time curve; refining a good initial tree is where it helps (64×64 lattice: tc 78.7 in 89 s vs 89–93 for TreeSA from greedy) |
+| Large networks (1000–8000 tensors, RTX 6000 or H200 vs omeco on 10 threads) | **about even** (the H200 is only 1.0–1.3× faster than the RTX 6000 on long chains): same quality-vs-time curve; refining a good initial tree is where it helps (64×64 lattice: tc 78.7 in 89 s vs 89–93 for TreeSA from greedy) |
 | Scale | any number of labels (tested to 8064, 64×64 lattice), up to 32767 tensors |
 
 Where it does not win:

@@ -56,3 +56,20 @@ for m in order:
     out.append(f"| {m} | " + " | ".join(cells) + " |")
 open(os.path.join(R, "large_summary.md"), "w").write("\n".join(out) + "\n")
 print("\n".join(out))
+
+# RTX 6000 vs H200 wall time for the same GPU runs (identical trees: the annealer is deterministic per seed)
+h = os.path.join(R, "large_compare_h200.jsonl")
+if os.path.exists(h):
+    H = [json.loads(l) for l in open(h)]
+    key = lambda r: (r["instance"], r["nchains"], r["niters"], r["scheme"], r.get("init"))
+    rtx = {key(r): r for r in rows if r["method"] == "gpu" and "error" not in r}
+    t = ["", "## Same runs on an H200 (workergpu318) vs the RTX 6000", "",
+         "| instance | config | tc RTX / H200 | wall RTX 6000 | wall H200 | speed-up |", "|---|---|---|---:|---:|---:|"]
+    for r in sorted(H, key=lambda r: (r["nchains"], r["niters"], r["instance"])):
+        q = rtx.get(key(r))
+        if q is None or "error" in r:
+            continue
+        t.append(f"| {r['instance']} | {label(r)[4:]} | {q['tc']:.2f} / {r['tc']:.2f} | {q['wall']:.0f} s | {r['wall']:.0f} s | "
+                 f"{q['wall'] / r['wall']:.2f}x |")
+    open(os.path.join(R, "large_summary.md"), "a").write("\n".join(t) + "\n")
+    print("\n".join(t))

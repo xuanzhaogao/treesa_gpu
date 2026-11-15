@@ -619,7 +619,7 @@ Question: does the small-instance advantage survive on large networks?  Instance
 graph networks `sqL` (one tensor per vertex, one label per edge; a row-major sweep gives sc = L+1),
 random 3-regular graph networks `reg3_N` (networkx seed 1), lattice-local 3-SAT `gridL` and random
 3-SAT `sat500`.  Pure-tc objective (sc_target 10000) for both optimizers.  GPU: Quadro RTX 6000
-(ccmlin078; the H100 was busy); omeco: `RAYON_NUM_THREADS=12` on the otherwise idle cores of
+(ccmlin078), repeated on an H200 below; omeco: `RAYON_NUM_THREADS=12` on the otherwise idle cores of
 workergpu165 (10 trials run in parallel).  Single runs; cells tc / sc / wall s.
 
 | method | sq32 (m=1024, 1984 labels) | sq48 (m=2304, 4512 labels) | sq64 (m=4096, 8064 labels) | reg3_1000 (m=1000, 1500 labels) | grid32 (m=3072, 1024 labels) | sat500 (m=2130, 500 labels) | grid45 (m=6075, 2025 labels) | reg3_2000 (m=2000, 3000 labels) |
@@ -644,9 +644,11 @@ as omeco on 10 threads:
   345.2 in 21 s), sq32 (44.9 in 24 s vs 46.1–47.0).
 * omeco ahead or equal: grid45 (omeco 90.7 in 187 s; GPU 93.2 in 96 s, 90.9 in 303 s), sq48 (63.4 vs 65.2 in
   ~105 s), grid32 (tie at ~25 s), reg3_2000 (same curve; GPU's 72×150 run reaches the best value, 261.1, in 262 s).
-* The 2–11 log2-unit wins of the small random 3-SAT instances do not carry over.  The H100 is 2.4–3.6× faster
-  than the RTX 6000 on wide instances (throughput table above), which would give the GPU a modest edge, not a
-  large one.
+* The 2–11 log2-unit wins of the small random 3-SAT instances do not carry over.
+* **A bigger GPU does not change this.**  The same runs on an H200 (workergpu318; identical trees) take
+  1.00–1.31× less time with 72 chains and 1.09–3.72× less with 576 chains (sat500 3.7×, grid45 2.3×, the graph
+  networks 1.1–1.6×); table at the end of `bench/results/large_summary.md`.  Long chains are latency-bound
+  (one warp walks one chain's nodes), so on large networks the 2018 Turing card and the H200 are almost equal.
 
 Why (visits/s from the run lengths; omeco per core = its total / 10 trials):
 
