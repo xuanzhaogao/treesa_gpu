@@ -16,10 +16,14 @@ Compared with omeco's TreeSA (Rust, multithreaded). Tables and raw data: [`docs/
 | Against omeco's heavy setting (32 trials × 200 sweeps, 10–25 s) | better trees in **1.1–2.5 s** |
 | Contraction time on an H100 ([booltn](https://github.com/xuanzhaogao/booltn)), GPU-time energy `tc+h100` | trees contract **4–64× faster** than omeco trees (grid 3-SAT L = 22: 1.24 s → 19 ms) |
 | Slicing inside the annealer | modeled total time **1.5–341× lower** than omeco TreeSA + `slice_code` (geometric mean 7.2×); random 3-SAT n = 70 measured **41.7 s** vs about 13 min projected for the omeco tree |
-| Scale | any number of labels (tested to 2025, grid L = 45), up to 32767 tensors |
+| Large networks (1000–8000 tensors, RTX 6000 vs omeco on 10 threads) | **about even**: same quality-vs-time curve; refining a good initial tree is where it helps (64×64 lattice: tc 78.7 in 89 s vs 89–93 for TreeSA from greedy) |
+| Scale | any number of labels (tested to 8064, 64×64 lattice), up to 32767 tensors |
 
 Where it does not win:
 * Easy instances, because each call costs about 0.3 s of process start.
+* Large networks (thousands of labels): label sets are dense bitsets over all labels, so each visit costs
+  O(#labels); one GPU chain runs at 0.06–0.9 of a CPU core, and big instances need long chains. See the
+  report's "Large networks" section.
 * Grid slicing runs, which take as long as omeco on 96 cores; the GPU wins on contraction time, not on
   optimizer wall time.
 * `mode="h100"` on its own, which gets stuck; use `"tc+h100"`.

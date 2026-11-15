@@ -1,0 +1,24 @@
+{"instance": "sq32", "m": 1024, "labels": 1984, "host": "workergpu165", "method": "omeco_greedy", "wall": 0.02, "threads": "12", "tc": 61.003, "sc": 47}
+{"instance": "sq32", "m": 1024, "labels": 1984, "host": "workergpu165", "method": "omeco_treesa", "ntrials": 10, "niters": 50, "wall": 8.17, "threads": "12", "tc": 46.14, "sc": 37}
+{"instance": "reg3_1000", "m": 1000, "labels": 1500, "host": "workergpu165", "method": "omeco_greedy", "wall": 0.03, "threads": "12", "tc": 285.0, "sc": 221}
+{"instance": "reg3_1000", "m": 1000, "labels": 1500, "host": "workergpu165", "method": "omeco_treesa", "ntrials": 10, "niters": 50, "wall": 11.09, "threads": "12", "tc": 134.83, "sc": 128}
+{"instance": "grid32", "m": 3072, "labels": 1024, "host": "workergpu165", "method": "omeco_greedy", "wall": 0.18, "threads": "12", "tc": 115.045, "sc": 85}
+{"instance": "grid32", "m": 3072, "labels": 1024, "host": "workergpu165", "method": "omeco_treesa", "ntrials": 10, "niters": 50, "wall": 21.05, "threads": "12", "tc": 61.604, "sc": 55}
+{"instance": "sat500", "m": 2130, "labels": 500, "host": "workergpu165", "method": "omeco_greedy", "wall": 0.52, "threads": "12", "tc": 493.011, "sc": 481}
+{"instance": "sat500", "m": 2130, "labels": 500, "host": "workergpu165", "method": "omeco_treesa", "ntrials": 10, "niters": 50, "wall": 21.07, "threads": "12", "tc": 345.217, "sc": 341}
+{"instance": "sq48", "m": 2304, "labels": 4512, "host": "workergpu165", "method": "omeco_greedy", "wall": 0.05, "threads": "12", "tc": 88.499, "sc": 63}
+{"instance": "sq48", "m": 2304, "labels": 4512, "host": "workergpu165", "method": "omeco_treesa", "ntrials": 10, "niters": 50, "wall": 25.2, "threads": "12", "tc": 66.175, "sc": 58}
+{"instance": "grid45", "m": 6075, "labels": 2025, "host": "workergpu165", "method": "omeco_greedy", "wall": 0.38, "threads": "12", "tc": 160.022, "sc": 111}
+{"instance": "grid45", "m": 6075, "labels": 2025, "host": "workergpu165", "method": "omeco_treesa", "ntrials": 10, "niters": 50, "wall": 47.32, "threads": "12", "tc": 103.759, "sc": 98}
+{"instance": "reg3_2000", "m": 2000, "labels": 3000, "host": "workergpu165", "method": "omeco_greedy", "wall": 0.07, "threads": "12", "tc": 604.0, "sc": 446}
+{"instance": "reg3_2000", "m": 2000, "labels": 3000, "host": "workergpu165", "method": "omeco_treesa", "ntrials": 10, "niters": 50, "wall": 38.83, "threads": "12", "tc": 276.399, "sc": 270}
+{"instance": "sq64", "m": 4096, "labels": 8064, "host": "workergpu165", "method": "omeco_greedy", "wall": 0.08, "threads": "12", "tc": 117.007, "sc": 81}
+{"instance": "sq64", "m": 4096, "labels": 8064, "host": "workergpu165", "method": "omeco_treesa", "ntrials": 10, "niters": 50, "wall": 55.68, "threads": "12", "tc": 91.105, "sc": 74}
+{"instance": "sq32", "m": 1024, "labels": 1984, "host": "workergpu165", "method": "omeco_treesa", "ntrials": 10, "niters": 200, "wall": 35.86, "threads": "12", "tc": 46.979, "sc": 39}
+{"instance": "reg3_1000", "m": 1000, "labels": 1500, "host": "workergpu165", "method": "omeco_treesa", "ntrials": 10, "niters": 200, "wall": 42.28, "threads": "12", "tc": 132.089, "sc": 125}
+{"instance": "grid32", "m": 3072, "labels": 1024, "host": "workergpu165", "method": "omeco_treesa", "ntrials": 10, "niters": 200, "wall": 84.69, "threads": "12", "tc": 60.438, "sc": 53}
+{"instance": "sat500", "m": 2130, "labels": 500, "host": "workergpu165", "method": "omeco_treesa", "ntrials": 10, "niters": 200, "wall": 81.83, "threads": "12", "tc": 327.676, "sc": 324}
+{"instance": "sq48", "m": 2304, "labels": 4512, "host": "workergpu165", "method": "omeco_treesa", "ntrials": 10, "niters": 200, "wall": 101.64, "threads": "12", "tc": 63.391, "sc": 50}
+{"instance": "grid45", "m": 6075, "labels": 2025, "host": "workergpu165", "method": "omeco_treesa", "ntrials": 10, "niters": 200, "wall": 186.58, "threads": "12", "tc": 90.682, "sc": 83}
+{"instance": "reg3_2000", "m": 2000, "labels": 3000, "host": "workergpu165", "method": "omeco_treesa", "ntrials": 10, "niters": 200, "wall": 145.51, "threads": "12", "tc": 268.11, "sc": 262}
+{"instance": "sq64", "m": 4096, "labels": 8064, "host": "workergpu165", "method": "omeco_treesa", "ntrials": 10, "niters": 200, "wall": 248.52, "threads": "12", "tc": 93.354, "sc": 84}

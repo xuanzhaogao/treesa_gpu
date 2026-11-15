@@ -613,6 +613,73 @@ by recomputing the existing trees' `iy`).
   trees in the measured model.
 * The timings are single runs; omeco has no Python seed, so its run-to-run variance is unmeasured.
 
+## Large networks: 1000–8000 tensors (`bench/large_compare.py`, `bench/results/large_summary.md`)
+
+Question: does the small-instance advantage survive on large networks?  Instances: L×L square-lattice
+graph networks `sqL` (one tensor per vertex, one label per edge; a row-major sweep gives sc = L+1),
+random 3-regular graph networks `reg3_N` (networkx seed 1), lattice-local 3-SAT `gridL` and random
+3-SAT `sat500`.  Pure-tc objective (sc_target 10000) for both optimizers.  GPU: Quadro RTX 6000
+(ccmlin078; the H100 was busy); omeco: `RAYON_NUM_THREADS=12` on the otherwise idle cores of
+workergpu165 (10 trials run in parallel).  Single runs; cells tc / sc / wall s.
+
+| method | sq32 (m=1024, 1984 labels) | sq48 (m=2304, 4512 labels) | sq64 (m=4096, 8064 labels) | reg3_1000 (m=1000, 1500 labels) | grid32 (m=3072, 1024 labels) | sat500 (m=2130, 500 labels) | grid45 (m=6075, 2025 labels) | reg3_2000 (m=2000, 3000 labels) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| row-major sweep | 44.9 / 33 / 0 | 62.1 / 49 / 0 | 78.9 / 65 / 0 | – | – | – | – | – |
+| omeco greedy | 61.0 / 47 / 0 | 88.5 / 63 / 0 | 117.0 / 81 / 0 | 285.0 / 221 / 0 | 115.0 / 85 / 0 | 493.0 / 481 / 1 | 160.0 / 111 / 0 | 604.0 / 446 / 0 |
+| omeco TreeSA 10x50 | 46.1 / 37 / 8 | 66.2 / 58 / 25 | 91.1 / 74 / 56 | 134.8 / 128 / 11 | 61.6 / 55 / 21 | 345.2 / 341 / 21 | 103.8 / 98 / 47 | 276.4 / 270 / 39 |
+| omeco TreeSA 10x200 | 47.0 / 39 / 36 | 63.4 / 50 / 102 | 93.4 / 84 / 249 | 132.1 / 125 / 42 | **60.4** / 53 / 85 | **327.7** / 324 / 82 | **90.7** / 83 / 187 | 268.1 / 262 / 146 |
+| GPU pa 576x5 | 46.6 / 38 / 5 | 75.0 / 56 / 26 | 100.8 / 81 / 105 | 149.5 / 143 / 4 | 69.2 / 56 / 5 | 409.1 / 404 / 4 | 103.0 / 86 / 27 | 328.8 / 323 / 13 |
+| GPU indep 576x5 | 45.8 / 34 / 6 | 75.0 / 58 / 28 | 96.2 / 88 / 116 | 142.6 / 136 / 4 | 65.1 / 58 / 5 | 417.7 / 414 / 4 | 99.0 / 86 / 26 | 324.9 / 320 / 15 |
+| GPU pa 576x20 | 45.0 / 33 / 18 | 75.0 / 58 / 97 | 101.0 / 79 / 412 | 139.1 / 132 / 13 | 65.1 / 51 / 16 | 357.4 / 352 / 11 | 96.6 / 83 / 91 | 290.5 / 284 / 48 |
+| GPU indep 576x20 | 44.9 / 33 / 24 | 65.2 / 52 / 111 | 91.2 / 77 / 464 | 135.3 / 128 / 13 | 63.4 / 54 / 18 | 377.5 / 374 / 12 | 93.2 / 79 / 96 | 278.4 / 272 / 52 |
+| GPU indep 72x50 | 45.6 / 34 / 42 | 66.4 / 53 / 216 | 89.0 / 75 / 801 | 131.3 / 125 / 24 | 61.5 / 54 / 25 | 341.0 / 336 / 6 | 95.1 / 83 / 92 | 270.9 / 264 / 85 |
+| GPU indep 144x50 | 45.3 / 36 / 46 | 66.4 / 53 / 222 | 88.9 / 80 / 853 | 131.3 / 125 / 25 | 61.5 / 54 / 27 | 339.6 / 335 / 7 | 94.9 / 87 / 97 | 270.9 / 264 / 89 |
+| GPU indep 72x150 | 45.2 / 34 / 142 | – | – | **130.4** / 123 / 71 | 62.3 / 54 / 82 | 329.8 / 326 / 17 | 90.9 / 83 / 303 | **261.1** / 253 / 262 |
+| GPU indep 576x5 from sweep, beta0 5 | 44.3 / 33 / 5 | 61.7 / 49 / 24 | **78.7** / 65 / 89 | – | – | – | – | – |
+| GPU indep 72x20 from sweep, beta0 5 | **44.2** / 33 / 13 | **61.7** / 49 / 67 | – | – | – | – | – | – |
+
+**Answer: no.**  On these sizes GPU TreeSA (RTX 6000) lies on about the same quality-versus-time curve
+as omeco on 10 threads:
+* GPU ahead at matched time: reg3_1000 (131.3 in 24 s vs omeco 132.1 in 42 s), sat500 (339.6 in 7 s vs
+  345.2 in 21 s), sq32 (44.9 in 24 s vs 46.1–47.0).
+* omeco ahead or equal: grid45 (omeco 90.7 in 187 s; GPU 93.2 in 96 s, 90.9 in 303 s), sq48 (63.4 vs 65.2 in
+  ~105 s), grid32 (tie at ~25 s), reg3_2000 (same curve; GPU's 72×150 run reaches the best value, 261.1, in 262 s).
+* The 2–11 log2-unit wins of the small random 3-SAT instances do not carry over.  The H100 is 2.4–3.6× faster
+  than the RTX 6000 on wide instances (throughput table above), which would give the GPU a modest edge, not a
+  large one.
+
+Why (visits/s from the run lengths; omeco per core = its total / 10 trials):
+
+| instance | labels | NW | omeco visits/s per core | GPU 576×20, whole GPU | GPU per chain (576 / 72 chains) |
+|---|---:|---:|---:|---:|---:|
+| sat500 | 500 | 16 | 1.6e6 | 7.2e8 = 459 cores | 0.80 / 4.4 core |
+| grid32 | 1024 | 32 | 2.2e6 | 6.3e8 = 291 cores | 0.51 / 0.87 core |
+| reg3_1000 | 1500 | 48 | 1.4e6 | 2.7e8 = 192 cores | 0.33 / 0.45 core |
+| grid45 | 2025 | 64 | 2.0e6 | 2.3e8 = 117 cores | 0.20 / 0.52 core |
+| reg3_2000 | 3000 | 96 | 0.8e6 | 1.4e8 = 170 cores | 0.29 / 0.43 core |
+| sq48 | 4512 | 144 | 1.4e6 | 7.4e7 = 55 cores | 0.09 / 0.12 core |
+| sq64 | 8064 | 252 | 1.0e6 | 3.1e7 = 32 cores | 0.06 / 0.08 core |
+
+1. **Dense label bitsets.**  Every label set is a bitset over *all* labels, so a visit streams 5·NW words although a
+   node holds at most ~sc labels.  The cost per visit grows with the network size, and per sweep as m·labels; omeco's
+   cost per visit depends only on the local set sizes.  On graph networks (labels ≈ 2 m) the GPU falls from ~460
+   to ~30 core-equivalents.
+2. **Large instances need long chains, not many chains.**  Quality keeps improving with sweeps per level (omeco
+   10×50 → 10×200: −1.2 to −17.5 log2 units on the non-lattice instances, GPU 576×20 → 72×150: −1.1 to −47.7;
+   on sq32/sq64 omeco's longer run ended worse, +0.9/+2.3, single runs), while best-of-N over many short chains
+   helps little.  A GPU chain (one warp, lanes over the frontier) runs at 0.06–0.9 of one CPU core here, so the GPU
+   wins only through the number of chains, which is the wrong lever at this size.
+3. **The initial tree dominates on structured networks.**  From omeco's greedy tree, both annealers end up to 12
+   log2 units *above* a plain row-major sweep of the lattice (sq48: 63.4–75.0 vs 62.1; sq64: 88.9–101.0 vs 78.9).  Started from the sweep at
+   β = 5, the GPU improves it in seconds to a minute: sq32 44.2, sq48 61.7, sq64 78.7 (89 s), the best trees in
+   the table.
+
+What would fix it: sparse label sets (sorted 16-bit label lists, cost ∝ local set size instead of NW), several
+warps per chain for long schedules (moves on disjoint subtrees), and a partitioning-based initial tree
+(recursive bisection, as cotengra/KaHyPar do) with GPU TreeSA as the refinement stage.  Also: node ids are
+16-bit, so networks above 32767 tensors are rejected (257 of the 1000 MCC 2020–2024 model-counting
+instances after unit propagation).
+
 ## Known limitations
 
 * Only the TreeSA core (+ in-annealer slicing): TreeDecomp, `rw_weight = 0`; no PathDecomp, omeco's
