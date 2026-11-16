@@ -70,6 +70,10 @@ struct Params {
   int max_slices;   // cap on |S|
   int coop_max;     // warp kernel (LPC 32): at most this many lanes share one node visit (power of 2; 1 = off)
   int coop_min;     // ... and at least this many (power of 2 <= coop_max), even when >= 32 nodes are ready
+  int coop_full;    // kernel par: lanes per node when a phase has more than 32 nodes per warp (power of 2 <= coop_max)
+  int coop_cpl;     // kernel par, coop_full auto with summaries: target nonzero chunks (of the node's own set) per lane
+  int par_follow;   // kernel par: an accepted first visit re-arms the pivot child if it was already visited
+  int par_band;     // kernel par: 0 random order; L >= 2: top-down within bands of L levels (depth at sweep start)
   int nsum;         // wide path: 32-bit summary words per node (bit c: 16-byte chunk c of the label set is nonzero); 0 = off
   int sum_off;      // word offset of the summaries [nint][nsum] inside a chain record
   float sc_target, sc_weight;
@@ -231,4 +235,38 @@ HD int pick_rule(bool li, bool ri, uint32_t r) {
   if (li) return (int)(r >> 31);       // right is leaf: rules 1:2
   if (ri) return 2 + (int)(r >> 31);   // left is leaf: rules 3:4
   return -1;
+}
+
+// ----------------------------------------------------------------------------
+// Parallel ("par") sweep order.  A move at internal node v reads the label sets of v, its children
+// and grandchildren and rewrites only v's and one child's child pointers and that child's labels;
+// the label set of every node is fixed by its leaf set, which no move at another node changes.
+// Moves at two nodes that are not parent and child therefore touch disjoint state and commute.
+// A par sweep gives every internal node a random 16-bit priority and repeats: every unvisited node
+// whose (priority, id) key beats those of its unvisited parent and internal children is visited
+// (an independent set, visited concurrently), until all nodes are visited.  Each node gets exactly
+// one proposal per sweep, with the same Philox numbers as in the pre-order sweep.
+// ----------------------------------------------------------------------------
+HD uint32_t mix32(uint32_t h) {
+  h ^= h >> 16;
+  h *= 0x85EBCA6Bu;
+  h ^= h >> 13;
+  h *= 0xC2B2AE35u;
+  h ^= h >> 16;
+  return h;
+}
+
+// priority of internal node v in sweep s of chain c (odd, never 0; 0 marks "visited")
+HD uint32_t par_pri(uint32_t v, uint32_t s, uint32_t c, uint32_t key0) {
+  uint32_t h = mix32(v * 0x9E3779B1u + mix32(s * 0x85EBCA77u + mix32(c ^ key0)));
+  return (h >> 16) | 1u;
+}
+// par_band L: priority from the node's depth d at the start of the sweep (top of each band of L levels first),
+// random within a band position (odd, never 0)
+HD uint32_t par_band_pri(uint32_t v, uint32_t s, uint32_t c, uint32_t key0, int d, int L) {
+  return ((uint32_t)((L - 1 - d % L) & 15) << 12) | (par_pri(v, s, c, key0) & 0x0FFEu) | 1u;
+}
+// par_follow: priority of a follow-up visit (even, nonzero); hs = mix32(s * 0x85EBCA77u + mix32(c ^ key0))
+HD uint32_t par_follow_pri(uint32_t v, uint32_t hs) {
+  return ((mix32((v * 0x9E3779B1u + hs) ^ 0x5BD1E995u) >> 16) & 0xFFFEu) | 2u;
 }

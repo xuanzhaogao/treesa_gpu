@@ -87,7 +87,7 @@ static inline void ref_abcacb(const std::vector<int>& a, const std::vector<int>&
 // Julia `optimize_subtree!(tree, β, ...)` for one node, then recursion into the (new) children.
 template <int MODE>
 static void ref_optimize_subtree(RefTree& T, int v, float beta, uint32_t sweep, uint32_t chain, const Params& P,
-                                 long long& nprop, long long& nacc) {
+                                 long long& nprop, long long& nacc, bool recurse = true) {
   if (T.isleaf(v)) return;
   int L = T.left[v], R = T.right[v];
   bool li = !T.isleaf(L), ri = !T.isleaf(R);
@@ -119,7 +119,64 @@ static void ref_optimize_subtree(RefTree& T, int v, float beta, uint32_t sweep, 
     else if (rule == 3) { int aa = L, bb = T.left[R]; T.left[v] = bb; T.left[R] = aa; T.labels[R] = subout; }
     else { int aa = L, cc = T.right[R]; T.left[v] = cc; T.right[R] = aa; T.labels[R] = subout; }
   }
+  if (!recurse) return;
   int nl = T.left[v], nr = T.right[v];  // siblings(tree) after the update
   ref_optimize_subtree<MODE>(T, nl, beta, sweep, chain, P, nprop, nacc);
   ref_optimize_subtree<MODE>(T, nr, beta, sweep, chain, P, nprop, nacc);
+}
+
+// One sweep in the parallel order (common.h, par_pri): repeatedly visit (without recursion) the
+// independent set of unvisited internal nodes whose (priority, id) key beats their unvisited parent
+// and internal children, until every internal node is visited.  The visits of one phase commute,
+// so applying them one after the other reproduces the concurrent GPU phase.
+template <int MODE>
+static void ref_par_sweep(RefTree& T, float beta, uint32_t sweep, uint32_t chain, const Params& P,
+                          long long& nprop, long long& nacc) {
+  const int m = T.m, n = 2 * m - 1;
+  std::vector<int> parent(n, -1);
+  for (int v = m; v < n; v++) { parent[T.left[v]] = v; parent[T.right[v]] = v; }
+  std::vector<uint32_t> pri(n, 0);
+  for (int v = m; v < n; v++) pri[v] = par_pri((uint32_t)v, sweep, chain, P.key0);
+  if (P.par_band > 0) {  // depth at the start of the sweep (root 0), pre-order from the root
+    std::vector<int> dep(n, 0), st{n - 1};
+    while (!st.empty()) {
+      int v = st.back();
+      st.pop_back();
+      if (v < m) continue;
+      dep[T.left[v]] = dep[T.right[v]] = dep[v] + 1;
+      st.push_back(T.left[v]);
+      st.push_back(T.right[v]);
+    }
+    for (int v = m; v < n; v++) pri[v] = par_band_pri((uint32_t)v, sweep, chain, P.key0, dep[v], P.par_band);
+  }
+  auto key = [&](int u) { return (pri[u] << 16) | (uint32_t)u; };
+  std::vector<int> act;
+  for (;;) {
+    act.clear();
+    for (int v = m; v < n; v++) {
+      if (!pri[v]) continue;
+      uint32_t kv = key(v);
+      int p = parent[v];
+      if (p >= 0 && pri[p] && key(p) > kv) continue;
+      int l = T.left[v], r = T.right[v];
+      if (l >= m && pri[l] && key(l) > kv) continue;
+      if (r >= m && pri[r] && key(r) > kv) continue;
+      act.push_back(v);
+    }
+    if (act.empty()) break;
+    for (int v : act) {
+      const bool rev = (pri[v] & 1u) == 0;
+      const int l0 = T.left[v], r0 = T.right[v];
+      ref_optimize_subtree<MODE>(T, v, beta, rev ? (sweep | 0x80000000u) : sweep, chain, P, nprop, nacc, false);
+      if (P.par_follow && !rev && (T.left[v] != l0 || T.right[v] != r0)) {
+        int Pn = T.left[v] == l0 ? l0 : r0;  // the pivot keeps its slot
+        if (!pri[Pn]) pri[Pn] = par_follow_pri((uint32_t)Pn, mix32(sweep * 0x85EBCA77u + mix32(chain ^ P.key0)));
+      }
+      parent[T.left[v]] = v;
+      parent[T.right[v]] = v;
+      for (int u : {T.left[v], T.right[v]})
+        if (u >= m) { parent[T.left[u]] = u; parent[T.right[u]] = u; }
+      pri[v] = 0;
+    }
+  }
 }

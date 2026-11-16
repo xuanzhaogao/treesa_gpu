@@ -97,6 +97,9 @@ def run(method, name, cfg):
     kw = {}
     if cfg.get("init") == "sweep":          # refine the row-major sweep (sq lattices) from a colder start
         kw = dict(init="tree", init_tree=path_tree(list(range(len(ixs)))))
+    for k in ("order", "kernel", "par_follow"):    # sweep order / kernel (default: the package defaults)
+        if k in cfg:
+            kw[k] = cfg[k]
     if cfg.get("beta0") is not None:
         b0 = cfg["beta0"]
         kw["betas"] = [b0 + 0.05 * i for i in range(int(round((15 - b0) / 0.05)) + 1)]
@@ -105,7 +108,7 @@ def run(method, name, cfg):
                              scheme=cfg["scheme"], seed=cfg.get("seed", 1), mode="tc", timeout=7200, **kw)
     rec["wall"] = round(time.time() - t0, 2)
     rec.update(tc=round(info["tc_py"], 3), sc=info["sc_py"], kernel_s=info.get("kernel_s"), kernel=info.get("kernel"),
-               t_anneal=info.get("t_anneal"), gpu=subprocess.run(
+               t_anneal=info.get("t_anneal"), order=info.get("order"), gpu=subprocess.run(
                    ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader", "-i",
                     os.environ.get("CUDA_VISIBLE_DEVICES", "0").split(",")[0]],
                    capture_output=True, text=True).stdout.strip())

@@ -2,7 +2,8 @@
 
 A CUDA port of the TreeSA contraction-order optimizer (`OMEinsumContractionOrders.jl/src/treesa.jl`)
 specialized to tensor networks whose indices all have dimension 2 (k-SAT networks, `log2 size = popcount`).
-It runs hundreds to thousands of annealing chains concurrently, adds population schemes on top of
+It runs hundreds to thousands of annealing chains concurrently, also parallelizes *within* a chain (each
+sweep visits independent sets of nodes concurrently, `order="par"`, the default), adds population schemes on top of
 best-of-N, has GPU-runtime-aware energies, supports any number of labels (tested to 2025; e.g. grid
 3-SAT up to L = 45) and can anneal a **slice set together with the tree** (in-annealer slicing).
 
@@ -30,6 +31,10 @@ node's *new* children.  Node costs follow Julia `tcscrw`: `sc = |z|`, `tc = |z| 
 `dtc = log2(2^tc_l1 + 2^tc_r1) - log2(2^tc_l0 + 2^tc_r0)` over the two contractions the rule changes.
 All four rules are the same operation in slot form: swap the moved grandchild M with the uncle O
 (keeping slots), and give the pivot child the labels `X = (K|O)&(M|d)`.
+
+With `order="par"` (the default since the parallel sweep was added) the same moves, energies and random
+numbers are applied in a different order: see [Parallel sweep order](#parallel-sweep-order-orderpar-kernel-par).
+`order="preorder"` keeps the Julia recursion (bit-identical to the CPU port of it).
 
 ### Data structures
 * Node ids: leaves `0..m-1` (= input tensor ids), internal nodes `m..2m-2`, root fixed at `2m-2`
@@ -62,7 +67,8 @@ GPU kernels and a CPU reference bit for bit.
 | `warp` (a') | **one warp (or 16/8 lanes, `--lpc`) per chain; lanes process up to 32 ready nodes concurrently** (work list of nodes whose parent is done, in smem) | global |
 | `warpsm` | as `warp`, chain staged in shared memory for the launch (`niters` sweeps) | smem |
 | `block` | **one thread block of `wpc` warps per chain** (shared work list, block-wide prefix sum for the pushes); for few long chains | global |
-| `auto` | `warpsm` if 8 chains fit per block, or if the population exceeds L2 and ≥4 fit; else `block` when chains ≤ 8 per SM (`wpc` = 16 warps per SM / chains per SM, at most 8), else `warp` | |
+| `par` | **parallel sweep order**: one block of `wpc` warps per chain; each phase visits an independent set of nodes (no two parent and child) concurrently, `G` lanes per node | global (+ node arrays in smem) |
+| `auto` | order `par` (default): `par` with `wpc` = 16 warps per SM / chains per SM, clamped to [2 (4 from 600 internal nodes), 8].  Order `preorder`: `warpsm` if 8 chains fit per block, or if the population exceeds L2 and ≥4 fit; else `block` when chains ≤ 8 per SM (`wpc` = 16 warps per SM / chains per SM, at most 8), else `warp` | |
 
 The literal option (a) "lanes own bitset words" was not built: here `W` is 2–12 words, so ≥ 20 of 32
 lanes would idle, while lanes-own-nodes keeps lanes busy with independent work and also cuts the
@@ -127,6 +133,33 @@ streams 5·NW words (all bit-identical to the other kernels; tested in sections 
   chains a warp-per-chain kernel puts one warp on each SM of the RTX 6000, and the run is
   latency-bound; 8 warps per chain hide the latency.
 
+### Parallel sweep order (`order="par"`, kernel `par`)
+The pre-order sweep processes a node only after its parent, so a sweep takes as many sequential steps as the tree
+is deep.  Annealed trees of lattices are path-like: on sq64 from the row-major sweep a sweep of 4095 nodes took
+2467 steps with 1.7 ready nodes per step (~50 of a block's 256 lanes busy, every step a chain of dependent memory
+accesses).  But a move at node v reads the label sets of v, its children and grandchildren and writes only v's and
+one child's child pointers and that child's labels; the label set of every node is fixed by its leaf set, which
+no move elsewhere changes.  So **moves at two nodes that are not parent and child touch disjoint state and
+commute** (and the local dE does not change either), and any set of pairwise non-adjacent nodes can be visited at once.
+
+A par sweep gives every internal node a random 16-bit priority (`par_pri`, hashed from node, sweep, chain, seed)
+and repeats phases: each phase scans all nodes and takes the *unvisited nodes whose (priority, id) beats that of
+their unvisited parent and internal children* (Luby's independent-set rule), visits them concurrently, and marks
+them visited, until every node has been visited once.  Every node still gets exactly one proposal per sweep with
+the same Philox numbers as in the pre-order sweep; only the order differs.  A random order needs O(log n) phases:
+measured **6.5–7.7 phases per sweep** on all large networks (sq64 path-like tree: 7.1 instead of 2467 steps).
+
+Kernel `par`: one block of `wpc` warps per chain; priority, parent (maintained on accepted moves: the two nodes
+that change places get new parents) and the phase's work list are uint16 arrays in shared memory (6 B per internal
+node, up to ~10900 nodes in 64 KB).  A phase = a scan (ballot + one shared atomic per warp to compact the set) and
+the visits with G lanes per node: with ≤ 32 nodes per warp, G = 32 / nextpow2(nodes per warp) as in `block`; with
+more, G = `coop_full` (auto: 8 for chains ≥ 512 KB, else 2: on grid45 / reg3_2000 / sq64 8 lanes per node are
+1.3–2.2× faster than 1 because a group then reads whole 128-byte lines; on smaller chains 2 is best).
+`--par-follow` also re-visits the pivot child of an accepted move when the sweep already visited it (what the
+pre-order sweep does); it recovers most of the per-sweep quality gap below but costs 15–25 % more visits and lost at
+matched wall time, so it is off by default.  The CPU reference (`ref_par_sweep`) applies each phase's visits one
+after the other; GPU and reference agree bit for bit (validation section G).
+
 ### Slicing (`slicing=True`)
 * Every chain carries a slice set S (an `NW`-word bitset after the tree).  Stored node labels stay
   *unsliced*: the labels of the sliced network are exactly `labels & ~S` (slicing removes the label from
@@ -164,7 +197,10 @@ streams 5·NW words (all bit-identical to the other kernels; tested in sections 
   grid24 with one word per lane; automatic on a 46×46 lattice (4140 labels) from the row-major sweep,
   i.e. G = 32, with chunk summaries on and off, fixed slices and slice moves); **F** the block kernel
   (`wpc` 2 / 4 / 16 on sat100, reg3_250, lat14, grid24, grid45; `wpc` 8 on the 46×46 lattice; random
-  init, fixed slices, slice moves, forced cooperative visits).  Per configuration:
+  init, fixed slices, slice moves, forced cooperative visits); **G** the parallel sweep order (`--kernel par`,
+  `wpc` 1 / 4 / 8 on sat100, reg3_250, lat14, grid24, grid45; `wpc` 8 on the 46×46 lattice; random init, forced
+  cooperative visits, `coop_full` 32, the wide path forced, fixed slices, summaries off, slice moves; compared
+  with the CPU reference of the same order, no cross-kernel check).  Per configuration:
   1. every chain is a valid tree and the **incrementally maintained labels equal a from-scratch
      recomputation from the topology** (occurrence counting) for every internal node;
   2. GPU per-chain energy kernel == host double-precision recomputation (criterion |Δlog2| < 1e-3,
@@ -174,7 +210,7 @@ streams 5·NW words (all bit-identical to the other kernels; tested in sections 
      sets, literal `ruleset`/`abcacb`/`tcscrw`/`update_tree!`) gives **bit-identical** trees.
   (3) and (4) run for fixed slice sets (C: the reference uses Julia's slicer semantics, sliced log2
   size 0) and are skipped for D (only the warp kernels implement slice moves).
-  Result (`tests/check_results_sm75.txt`): **298/298 passed**, 21 skipped (chains that do not fit in
+  Result (`tests/check_results_sm75.txt`): **338/338 passed**, 21 skipped (chains that do not fit in
   Turing's 64 KB shared memory for the smem kernels).
 * `tests/test_python.py` — `trees.complexity` == omeco `tree.complexity` on omeco greedy/TreeSA
   trees; dict↔children round trip; for all schemes/inits/modes the returned dict contains every
@@ -182,7 +218,9 @@ streams 5·NW words (all bit-identical to the other kernels; tested in sections 
   modeled times (`gpu_time`, `h100_time`) equal `treesa_gpu.trees` on the returned dict; with slicing
   (sat60, reg3_250, grid24 × {tc, tc+h100}) the tree's `iy` equal `recompute_outputs(tree, ixs_sliced,
   [])`, per-slice tc / sc / #sliced and `h100_time × 2^|S|` equal the binary's numbers, sc ≤ target,
-  and `runner_json` round-trips.  **62/62 passed** (`tests/test_python_results.txt`).
+  and `runner_json` round-trips.  **62/62 passed** (`tests/test_python_results.txt`, default order `par`); with
+  `order="preorder"` the output is byte-identical to the one before the parallel order existed
+  (`tests/test_python_results_preorder.txt`).
 * Cross-GPU determinism: the H100 (sm_90a build) reproduced all 96 GPU results of the slicing
   comparison bit-for-bit (same #sliced, same modeled time) — trees do not depend on the GPU.
 * All 72 saved trees in `trees/gpusa_slice/` (repository root) were re-validated independently (leaves,
@@ -745,9 +783,85 @@ With that same build on both GPUs, the H100 is 1.2–1.6× faster than the RTX 6
 * Starting from a good tree is still where the GPU helps most: from the row-major sweep, sq48 61.7 in 6 s and
   sq64 78.7 in 17 s (omeco from greedy: 63.4 and 91.1–93.4 after 100–250 s).
 
-Still open: the label sets remain dense bitsets (a visit costs O(NW); summaries help only when labels are
-local, as on lattices), the block kernel splits only a step's ready nodes (no moves on disjoint subtrees), and
-there is no partitioning-based initial tree.
+Still open after these kernels: the label sets remain dense bitsets (a visit costs O(NW); summaries help only when
+labels are local, as on lattices), the block kernel splits only a step's ready nodes (no moves on disjoint
+subtrees; addressed by the parallel order below), and there is no partitioning-based initial tree.
+
+### Parallel sweep order: many proposals at once inside each chain (raw data `large_compare_gpu_par.jsonl`, `par_order_study.jsonl`)
+
+The question was whether the GPU can run many samples inside each chain as well as many chains.  Measured on the
+kernels above (72 chains): a pre-order sweep has as many sequential steps as the tree is deep, and the annealed
+trees are deep.  Steps per sweep (sweep of every chain, short runs at the start of the schedule, or from the
+row-major sweep for sqL):
+
+| tree | internal nodes | pre-order: steps / sweep (nodes per step) | par: phases / sweep |
+|---|---:|---:|---:|
+| sat500, greedy, hot | 2129 | 54 (39) | 7.1 |
+| reg3_2000, greedy, hot | 1999 | 129 (15) | 7.0 |
+| sq64, greedy, hot | 4095 | 87 (47) | 7.4 |
+| sq32 / sq48 / sq64 from the row-major sweep | 1023 / 2303 / 4095 | 593 / 1369 / 2467 (1.7) | 6.4 / 6.8 / 7.1 |
+
+With the parallel order every phase holds hundreds of independent proposals, so the block's 256 lanes are busy and
+the run becomes memory-throughput-bound instead of latency-bound.  Same schedule, 72 chains, RTX 6000 (kernel
+seconds, `large_summary.md`): sat500 4.2 → 1.5 s, grid32 19.7 → 4.3, reg3_1000 16.2 → 1.7, sq32 23.3 → 2.3,
+grid45 39.8 → 18.7, reg3_2000 35.9 → 7.4, sq48 45.4 → 12.1, sq64 84.5 → 35.7 (**2.4–9.5×**); refining the row-major
+sweep (72×20): sq32 7.3 → 0.5, sq48 12.3 → 0.7, sq64 22.4 → 1.6 s (**11–17×**, same tc).
+
+**Quality per sweep** (72×50, 4 seeds, mean tc): equal on grid32 (pre-order 62.5, par 62.7), reg3_1000 (132.2 /
+132.5) and sq32 (45.1 / 45.2); worse on sat500 (340.3 / 342.9) and sq48 (67.0 / 69.5).  The pre-order sweep visits
+a rotated node's new children right after it, so a moved subtree can travel down several levels in one sweep; in a
+random order that happens with probability 2^-k.  Two variants put that back: `--par-follow` (re-visit the pivot
+child after an accepted move: sat500 339.8, sq48 68.5, +15–25 % time) and `--par-band L` (priority by depth at the
+start of the sweep, top-down inside bands of L levels, ~L phases per sweep: L = 16 gives sat500 339.6, sq48 68.5).
+
+**Quality at matched wall time** (what matters; the par runs spend the saved time on more sweeps):
+
+| instance | pre-order 72×50 (4 seeds) | par, same time (2–3 seeds) | par, more chains (576, same time) |
+|---|---|---|---|
+| sat500 | 340.3 in 4.2 s | **329.0** (72×150, 4.3 s) | 376.8 (8.5 s) |
+| reg3_1000 | 132.2 in 15.8 s | **128.5** (72×450, 15.4 s) | 130.6 (26 s) |
+| grid32 | 62.5 in 20.3 s | **59.6** (72×200, 17.5 s) | 62.4 (21 s) |
+| sq32 | 45.1 in 25.5 s | **44.6** (72×500, 23.2 s) | 44.4 (35 s) |
+| sq48 | 67.0 in 46.6 s | 66.9 (72×200, 49 s; 64.5 / 67.2 / 69.0) | 68.5 (47 s) |
+| sq64 | 90.0 in 84 s (89.0 / 91.0) | 90.4 (72×100, 66–69 s; 89.7 / 91.1) | – |
+
+* Spending the speed-up on longer chains wins; spending it on more chains (576) loses on 4 of 5.  The
+  follow and band variants do not win at matched time (sat500 330.6, grid32 60.2, sq48 68.3 with follow; sq48 66.5
+  with band 16), so both are off by default.
+* Population schemes on top of the parallel order lose at matched time on these networks (sat500 PA 330.7, trunc
+  334.0; grid32 62.9 / 63.6; sq48 69.9 / 73.5; independent chains 329.0 / 59.6 / 66.9): with only 72 chains, selection
+  costs more diversity than it gains.
+* sq64 from greedy stays at 89–91 for both orders and all lengths tried (par 89.5 / 89.7 / 89.1 after 39 / 75 / 226 s);
+  for big lattices the initial tree matters more than the annealer.
+
+Ladder against omeco (12 threads) and the pre-order kernels, single seed (`large_summary.md`, "GPU par" rows):
+
+| instance | GPU par (72 chains) | GPU pre-order (same kernels) | omeco TreeSA 10×50 / 10×200 |
+|---|---|---|---|
+| sat500 | 329.6 in 5 s, 324.9 in 19 s, **319.7** in 90 s | 341.0 in 5 s, 329.8 in 16 s, 325.3 in 83 s | 345.2 in 21 s, 327.7 in 82 s |
+| grid32 | 61.4 in 5 s, **60.0** in 18 s, 61.3 in 90 s | 61.5 in 20 s, 62.3 in 67 s | 61.6 in 21 s, 60.4 in 85 s |
+| reg3_1000 | 131.5 in 2 s, 128.4 in 16 s, **128.4** in 45 s | 131.3 in 17 s, 130.4 in 49 s | 134.8 in 11 s, 132.1 in 42 s |
+| sq32 | 45.2 in 3 s, 44.8 in 24 s; from the row sweep **44.1** in 8 s | 45.6 in 24 s; 44.2 in 8 s from the sweep | 46.1 in 8 s, 47.0 in 36 s |
+| reg3_2000 | 270.6 in 8 s, 256.6 in 29 s, **254.5** in 90 s | 270.9 in 37 s, 261.1 in 112 s | 276.4 in 39 s, 268.1 in 146 s |
+| grid45 | 95.4 in 21 s, 89.9 in 40 s, **87.9** in 116 s | 95.1 in 42 s, 90.9 in 140 s | 103.8 in 47 s, 90.7 in 187 s |
+| sq48 | 70.0 in 13 s, 64.5 in 55 s, 63.3 in 194 s; from the row sweep **61.6** in 12 s (61.7 in 2 s) | 66.4 in 47 s; 61.7 in 13 s from the sweep | 66.2 in 25 s, 63.4 in 102 s |
+| sq64 | 89.5 in 39 s, 89.1 in 226 s; from the row sweep **78.6** in 28 s (78.6 in 4 s) | 89.0 in 87 s, 86.7 in 284 s; 78.6 in 24 s from the sweep | 91.1 in 56 s, 93.4 in 249 s |
+
+* From greedy, **ahead of omeco at every budget on 6 of 8 networks** (sat500, reg3_1000, sq32, reg3_2000, grid45,
+  sq64) by 1.3–20 log2 units (e.g. sat500 324.9 in 19 s vs 345.2 in 21 s; reg3_2000 254.5 in 90 s vs 268.1 in 146 s;
+  grid45 89.9 in 40 s vs 90.7 in 187 s).  grid32: ahead at ~20 s (60.0 vs 61.6), but the single 90-s run ended at
+  61.3 vs omeco's 60.4.  sq48 from greedy is level (64.5 in 55 s, 63.3 in 194 s vs 66.2 in 25 s, 63.4 in 102 s);
+  from the row-major sweep 61.7 in 2 s.
+* Before the parallel order the GPU was ahead on 6 of 8 only at short budgets and behind on grid32 and sq48.
+* Single seeds at the long end are noisy (grid32 61.3 after 90 s vs 60.0 after 18 s; sq32 45.1 after 70 s).
+
+Downstream use (booltn root trees: grid 3-SAT L30 α3.0, 1024 chains × 50, sc target 34 / 30, sc_weight 4 / 16; 2
+seeds each): par gives sc 50 / 50 and 48 / 47 vs pre-order 50 / 47 and 47 / 48 at 0.84× the time; with 1024 chains
+the GPU is already busy, so the speed-up is small there; 3× more sweeps (250 s) gives sc 46 / 46 and 46 / 50.
+
+Still open: dense bitsets (visits still cost O(labels); sq64 hot runs are now bandwidth-bound), no
+partitioning-based initial tree (the biggest lever on large lattices), and the float energy modes are not
+bit-reproducible against the CPU reference (see Known limitations).
 
 ## Known limitations
 
@@ -770,10 +884,18 @@ there is no partitioning-based initial tree.
   matched-time table); sc_target is enforced by selection + repair, not by the annealing itself.
 * omeco baselines are not reproducible across machines (same config, different results on ccmlin078
   and worker7273, e.g. sat70 T=30: 744 vs 355 s modeled), so treat single omeco numbers as one sample.
-* Lane occupancy of the warp kernel is bounded by the width of the "ready" frontier: ~0.4–0.5 on
+* Pre-order kernels: lane occupancy is bounded by the width of the "ready" frontier: ~0.4–0.5 on
   SAT trees, ~0.19 on deep (path-like) trees such as reg3_250; packing several chains per warp does
-  not help (divergence).  Cooperative visits fill the idle lanes above 512 labels only; below, a
-  visit is too short for the lane-sharing reductions to pay off.
+  not help (divergence).  Cooperative visits fill the idle lanes above 512 labels only.  The parallel order
+  (default) removes this bound (6.5–7.7 phases per sweep), but it is a different visiting order: per sweep it is
+  equal to the pre-order sweep on 3 of 5 networks and up to 2.5 log2 units worse on sat500 / sq48 (it wins at
+  matched wall time; see the results).  `warpsm` (chains in shared memory) has no parallel-order version, so for
+  small chains at thousands of chains the parallel order is up to 1.2× slower per sweep than `warpsm`.
+* Bit-identity with the CPU reference in the float energy modes (`gpu`, `h100`) is not guaranteed: `lse_f` uses
+  `log2f`/`exp2f`, whose host (glibc) and CUDA results can differ in the last bit, which flips a Metropolis decision
+  about once in 10^6–10^7 proposals.  Seen as 1 differing chain out of 48 in 1 of 12 seeds on reg3_250, for the
+  unchanged pre-order `warp` kernel and for `par` alike; the integer `tc` mode is exact (the validation matrix uses
+  configurations that pass; the GPU kernels always agree with each other).
 * Population annealing uses the global energy `log2 Σ 2^tc + sc penalty`, while the Metropolis moves
   use Julia's local surrogate `dtc` (not a Δ of that global energy), so PA here is a heuristic
   selection scheme, not an unbiased sampler.  It loses diversity: by the end, the population
@@ -792,11 +914,12 @@ there is no partitioning-based initial tree.
 | path | content |
 |---|---|
 | `csrc/common.h` | host/device shared code: Philox4x32-10, GPU cost models v1/v2, `MoveCounts`/`acc_counts`/`energy_from_counts` (abcacb + dE from popcount counters), rule selection, Metropolis |
-| `csrc/cpu_ref.h` | CPU reference: literal port of Julia `optimize_subtree!` with vector label sets and Julia-`Slicer` masking |
-| `csrc/treesa_gpu.cu` | kernels (`k_seq`, `k_warp` with slice moves and cooperative visits, `k_block`, `k_energy`, `k_copy`; register fast path W ≤ 16 and wide streaming path W = 0, with optional chunk summaries), host init (random/greedy trees, topology labels, slice sets), annealing driver with population schemes, stage 2, slicing selection + greedy repair, `--check` validation mode, CLI |
+| `csrc/cpu_ref.h` | CPU reference: literal port of Julia `optimize_subtree!` with vector label sets and Julia-`Slicer` masking; `ref_par_sweep` for the parallel order |
+| `csrc/treesa_gpu.cu` | kernels (`k_seq`, `k_warp` with slice moves and cooperative visits, `k_block`, `k_par` (parallel sweep order), `k_energy`, `k_copy`; register fast path W ≤ 16 and wide streaming path W = 0, with optional chunk summaries), host init (random/greedy trees, topology labels, slice sets), annealing driver with population schemes, stage 2, slicing selection + greedy repair, `--check` validation mode, CLI |
 | `treesa_gpu/driver.py`, `treesa_gpu/trees.py` | Python API `optimize(..., slicing=...)`, `runner_json`, instance writer, omeco-dict ↔ tree conversion |
 | `Makefile` | `make` (local GPU, `ARCH=native`) / `make ARCH=sm_90a OUT=treesa_gpu/bin/treesa_gpu_sm90` |
 | `tests/run_checks.sh`, `tests/check_results_sm75.txt` | kernel validation matrix and its output |
+| `tests/test_python_results.txt`, `tests/test_python_results_preorder.txt` | Python test output (default order `par`; `order="preorder"`, identical to the output before the parallel order) |
 | `tests/test_python.py` | Python-level validation |
 | `tests/data/` | test instances (`m nlabels / k l1..lk / niy ..`) and omeco greedy trees (`left right` per internal node) |
 | `bench/instances.py` | random 3-SAT (copy of `booltn.satgen`), omeco `reg3_*` graphs, lattice-local 3-SAT generator |

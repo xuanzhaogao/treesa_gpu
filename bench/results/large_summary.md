@@ -1,13 +1,13 @@
 # Large networks: GPU TreeSA (Quadro RTX 6000) vs omeco (12 threads, workergpu165 CPU)
 
-Cells: tc (log2) / sc / wall s; pure-tc objective (sc_target 10000); single runs, GPU seed 1. Best tc per instance in bold. GPU wall includes process start and greedy init. GPU: original kernels; GPU v2: new kernels (same trees). †: intermediate build of the new kernels (16 warps per chain).
+Cells: tc (log2) / sc / wall s; pure-tc objective (sc_target 10000); single runs, GPU seed 1. Best tc per instance in bold. GPU wall includes process start and greedy init. GPU: original kernels; GPU v2: new kernels (same trees). †: intermediate build of the new kernels (16 warps per chain). GPU par: parallel sweep order (kernel par), 72 chains.
 
 | method | sq32 (m=1024, 1984 labels) | sq48 (m=2304, 4512 labels) | sq64 (m=4096, 8064 labels) | reg3_1000 (m=1000, 1500 labels) | grid32 (m=3072, 1024 labels) | sat500 (m=2130, 500 labels) | grid45 (m=6075, 2025 labels) | reg3_2000 (m=2000, 3000 labels) |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | row-major sweep | 44.9 / 33 / 0 | 62.1 / 49 / 0 | 78.9 / 65 / 0 | – | – | – | – | – |
 | omeco greedy | 61.0 / 47 / 0 | 88.5 / 63 / 0 | 117.0 / 81 / 0 | 285.0 / 221 / 0 | 115.0 / 85 / 0 | 493.0 / 481 / 1 | 160.0 / 111 / 0 | 604.0 / 446 / 0 |
 | omeco TreeSA 10x50 | 46.1 / 37 / 8 | 66.2 / 58 / 25 | 91.1 / 74 / 56 | 134.8 / 128 / 11 | 61.6 / 55 / 21 | 345.2 / 341 / 21 | 103.8 / 98 / 47 | 276.4 / 270 / 39 |
-| omeco TreeSA 10x200 | 47.0 / 39 / 36 | 63.4 / 50 / 102 | 93.4 / 84 / 249 | 132.1 / 125 / 42 | **60.4** / 53 / 85 | 327.7 / 324 / 82 | 90.7 / 83 / 187 | 268.1 / 262 / 146 |
+| omeco TreeSA 10x200 | 47.0 / 39 / 36 | 63.4 / 50 / 102 | 93.4 / 84 / 249 | 132.1 / 125 / 42 | 60.4 / 53 / 85 | 327.7 / 324 / 82 | 90.7 / 83 / 187 | 268.1 / 262 / 146 |
 | GPU pa 576x5 | 46.6 / 38 / 5 | 75.0 / 56 / 26 | 100.8 / 81 / 105 | 149.5 / 143 / 4 | 69.2 / 56 / 5 | 409.1 / 404 / 4 | 103.0 / 86 / 27 | 328.8 / 323 / 13 |
 | GPU indep 576x5 | 45.8 / 34 / 6 | 75.0 / 58 / 28 | 96.2 / 88 / 116 | 142.6 / 136 / 4 | 65.1 / 58 / 5 | 417.7 / 414 / 4 | 99.0 / 86 / 26 | 324.9 / 320 / 15 |
 | GPU pa 576x20 | 45.0 / 33 / 18 | 75.0 / 58 / 97 | 101.0 / 79 / 412 | 139.1 / 132 / 13 | 65.1 / 51 / 16 | 357.4 / 352 / 11 | 96.6 / 83 / 91 | 290.5 / 284 / 48 |
@@ -16,31 +16,47 @@ Cells: tc (log2) / sc / wall s; pure-tc objective (sc_target 10000); single runs
 | GPU indep 144x50 | 45.3 / 36 / 46 | 66.4 / 53 / 222 | 88.9 / 80 / 853 | 131.3 / 125 / 25 | 61.5 / 54 / 27 | 339.6 / 335 / 7 | 94.9 / 87 / 97 | 270.9 / 264 / 89 |
 | GPU indep 72x150 | 45.2 / 34 / 142 | – | – | 130.4 / 123 / 71 | 62.3 / 54 / 82 | 329.8 / 326 / 17 | 90.9 / 83 / 303 | 261.1 / 253 / 262 |
 | GPU indep 576x5 from sweep, beta0 5 | 44.3 / 33 / 5 | 61.7 / 49 / 24 | 78.7 / 65 / 89 | – | – | – | – | – |
-| GPU indep 72x20 from sweep, beta0 5 | **44.2** / 33 / 13 | **61.7** / 49 / 67 | – | – | – | – | – | – |
+| GPU indep 72x20 from sweep, beta0 5 | 44.2 / 33 / 13 | 61.7 / 49 / 67 | – | – | – | – | – | – |
 | GPU v2 indep 72x50 | 45.6 / 34 / 24 | 66.4 / 53 / 47 | 89.0 / 75 / 87 | 131.3 / 125 / 17 | 61.5 / 54 / 20 | 341.0 / 336 / 5 | 95.1 / 83 / 42 | 270.9 / 264 / 37 |
 | GPU v2 indep 576x20 | 44.9 / 33 / 13 | 65.2 / 52 / 34 | 91.2 / 77 / 111 | 135.3 / 128 / 9 | 63.4 / 54 / 16 | 377.5 / 374 / 12 | 93.2 / 79 / 88 | 278.4 / 272 / 23 |
 | GPU v2 indep 72x150 | 45.2 / 34 / 81 | 66.3 / 51 / 167 | 86.7 / 76 / 284 | 130.4 / 123 / 49 | 62.3 / 54 / 67 | 329.8 / 326 / 16 | 90.9 / 83 / 140 | 261.1 / 253 / 112 |
 | GPU v2 indep 576x5 from sweep, beta0 5 | 44.3 / 33 / 3 | 61.7 / 49 / 6 | 78.7 / 65 / 17 | – | – | – | – | – |
-| GPU v2 indep 72x20 from sweep, beta0 5 | **44.2** / 33 / 8 | **61.7** / 49 / 13 | **78.6** / 65 / 24 | – | – | – | – | – |
-| GPU v2 indep 72x500† | 44.6 / 35 / 289 | 68.5 / 58 / 627 | 85.2 / 74 / 1210 | **127.6** / 120 / 179 | 60.7 / 52 / 231 | **325.3** / 320 / 83 | **85.0** / 77 / 596 | **255.3** / 248 / 412 |
+| GPU v2 indep 72x20 from sweep, beta0 5 | 44.2 / 33 / 8 | 61.7 / 49 / 13 | 78.6 / 65 / 24 | – | – | – | – | – |
+| GPU v2 indep 72x500† | 44.6 / 35 / 289 | 68.5 / 58 / 627 | 85.2 / 74 / 1210 | **127.6** / 120 / 179 | 60.7 / 52 / 231 | 325.3 / 320 / 83 | **85.0** / 77 / 596 | 255.3 / 248 / 412 |
+| GPU par indep 72x50 | 45.2 / 35 / 3 | 70.0 / 58 / 13 | 89.5 / 69 / 39 | 131.5 / 124 / 2 | 61.4 / 54 / 5 | 344.3 / 340 / 3 | 95.4 / 90 / 21 | 270.6 / 263 / 8 |
+| GPU par indep 72x150 | – | – | – | – | – | 329.6 / 325 / 5 | – | – |
+| GPU par indep 72x600 | – | – | – | – | – | 324.9 / 320 / 19 | – | **254.5** / 247 / 90 |
+| GPU par indep 72x3000 | – | – | – | – | – | **319.7** / 315 / 90 | – | – |
+| GPU par indep 72x200 | – | 64.5 / 54 / 55 | – | – | **60.0** / 53 / 18 | – | – | – |
+| GPU par indep 72x1000 | – | – | – | – | 61.3 / 54 / 90 | – | – | – |
+| GPU par indep 72x450 | – | – | – | 128.4 / 122 / 16 | – | – | – | – |
+| GPU par indep 72x1300 | – | – | – | 128.4 / 121 / 45 | – | – | – | – |
+| GPU par indep 72x500 | 44.8 / 34 / 24 | – | – | – | – | – | – | – |
+| GPU par indep 72x1500 | 45.1 / 35 / 70 | – | – | – | – | – | – | – |
+| GPU par indep 72x20 from sweep, beta0 5 | 44.2 / 33 / 1 | 61.7 / 49 / 2 | 78.6 / 65 / 4 | – | – | – | – | – |
+| GPU par indep 72x300 from sweep, beta0 5 | **44.1** / 33 / 8 | **61.6** / 49 / 12 | **78.6** / 65 / 28 | – | – | – | – | – |
+| GPU par indep 72x190 | – | – | – | – | – | – | – | 256.6 / 250 / 29 |
+| GPU par indep 72x100 | – | – | 89.7 / 81 / 75 | – | – | – | 89.9 / 83 / 40 | – |
+| GPU par indep 72x300 | – | – | 89.1 / 71 / 226 | – | – | – | 87.9 / 80 / 116 | – |
+| GPU par indep 72x700 | – | 63.3 / 53 / 194 | – | – | – | – | – | – |
 
 ## Same runs on an H200 (workergpu318) vs the RTX 6000
 
 | instance | config | tc RTX / H200 | wall RTX 6000 | wall H200 | speed-up |
 |---|---|---|---:|---:|---:|
-| grid32 | indep 72x50 | 61.51 / 61.51 | 25 s | 23 s | 1.11x |
-| grid45 | indep 72x50 | 95.06 / 95.06 | 92 s | 92 s | 1.00x |
-| reg3_1000 | indep 72x50 | 131.35 / 131.35 | 24 s | 22 s | 1.12x |
-| reg3_2000 | indep 72x50 | 270.88 / 270.88 | 85 s | 83 s | 1.02x |
-| sat500 | indep 72x50 | 341.02 / 341.02 | 6 s | 5 s | 1.11x |
-| sq32 | indep 72x50 | 45.63 / 45.63 | 42 s | 39 s | 1.07x |
-| sq48 | indep 72x50 | 66.38 / 66.38 | 216 s | 210 s | 1.03x |
-| sq64 | indep 72x50 | 89.03 / 89.03 | 801 s | 727 s | 1.10x |
+| grid32 | indep 72x50 | 61.37 / 61.51 | 5 s | 23 s | 0.22x |
+| grid45 | indep 72x50 | 95.41 / 95.06 | 21 s | 92 s | 0.22x |
+| reg3_1000 | indep 72x50 | 131.54 / 131.35 | 2 s | 22 s | 0.10x |
+| reg3_2000 | indep 72x50 | 270.62 / 270.88 | 8 s | 83 s | 0.10x |
+| sat500 | indep 72x50 | 344.27 / 341.02 | 3 s | 5 s | 0.49x |
+| sq32 | indep 72x50 | 45.19 / 45.63 | 3 s | 39 s | 0.07x |
+| sq48 | indep 72x50 | 70.05 / 66.38 | 13 s | 210 s | 0.06x |
+| sq64 | indep 72x50 | 89.46 / 89.03 | 39 s | 727 s | 0.05x |
 | grid32 | indep 72x150 | 62.29 / 62.29 | 82 s | 73 s | 1.12x |
 | grid45 | indep 72x150 | 90.88 / 90.88 | 303 s | 302 s | 1.00x |
 | reg3_1000 | indep 72x150 | 130.41 / 130.41 | 71 s | 62 s | 1.15x |
 | reg3_2000 | indep 72x150 | 261.07 / 261.07 | 262 s | 252 s | 1.04x |
-| sat500 | indep 72x150 | 329.79 / 329.79 | 17 s | 13 s | 1.31x |
+| sat500 | indep 72x150 | 329.62 / 329.79 | 5 s | 13 s | 0.43x |
 | sq32 | indep 576x5 from sweep, beta0 5 | 44.29 / 44.29 | 5 s | 7 s | 0.76x |
 | sq48 | indep 576x5 from sweep, beta0 5 | 61.73 / 61.73 | 24 s | 24 s | 1.03x |
 | sq64 | indep 576x5 from sweep, beta0 5 | 78.67 / 78.67 | 89 s | 84 s | 1.06x |
@@ -121,3 +137,22 @@ Cooperative visits (G lanes per node when fewer than 32 nodes are ready; above 5
 | sq32 | indep 72x500 | 44.60 | – | 170 s | – | 289 s |
 | sq48 | indep 72x500 | 68.48 | – | 663 s | – | 627 s |
 | sq64 | indep 72x500 | 85.19 | – | 1312 s | – | 1210 s |
+
+## Parallel sweep order (kernel par) vs the pre-order sweep (GPU v2), RTX 6000, same configurations and seed
+
+Same moves and random numbers, different visiting order, so different trees (single seed: see the report for 4-seed means at equal sweeps and at matched time).
+
+| instance | config | tc pre-order / par | wall pre-order | wall par | speed-up | kernel s pre-order / par |
+|---|---|---|---:|---:|---:|---:|
+| grid32 | indep 72x50 | 61.51 / 61.37 | 20 s | 5 s | 4.01x | 19.7 / 4.3 |
+| grid45 | indep 72x50 | 95.06 / 95.41 | 42 s | 21 s | 2.03x | 39.8 / 18.7 |
+| reg3_1000 | indep 72x50 | 131.35 / 131.54 | 17 s | 2 s | 7.46x | 16.2 / 1.7 |
+| reg3_2000 | indep 72x50 | 270.88 / 270.62 | 37 s | 8 s | 4.40x | 35.9 / 7.4 |
+| sat500 | indep 72x50 | 341.02 / 344.27 | 5 s | 3 s | 2.00x | 4.2 / 1.5 |
+| sat500 | indep 72x150 | 329.79 / 329.62 | 16 s | 5 s | 2.99x | 15.2 / 4.4 |
+| sq32 | indep 72x50 | 45.63 / 45.19 | 24 s | 3 s | 8.39x | 23.3 / 2.3 |
+| sq48 | indep 72x50 | 66.38 / 70.05 | 47 s | 13 s | 3.49x | 45.4 / 12.1 |
+| sq64 | indep 72x50 | 89.03 / 89.46 | 87 s | 39 s | 2.26x | 84.5 / 35.7 |
+| sq32 | indep 72x20 from sweep, beta0 5 | 44.24 / 44.21 | 8 s | 1 s | 7.74x | 7.3 / 0.5 |
+| sq48 | indep 72x20 from sweep, beta0 5 | 61.69 / 61.69 | 13 s | 2 s | 8.12x | 12.3 / 0.7 |
+| sq64 | indep 72x20 from sweep, beta0 5 | 78.65 / 78.64 | 24 s | 4 s | 6.70x | 22.4 / 1.6 |

@@ -88,4 +88,28 @@ run "F block sat100 random init wpc4" -i tests/data/sat100.txt --mode tc --kerne
 run "F block reg3_250 coop forced wpc4" -i tests/data/reg3_250.txt --tree tests/data/reg3_250.tree --mode h100 --kernel block --wpc 4 --coop-max 32 --coop-min-units 1
 run "F block grid24 slices wpc4" -i tests/data/grid24.txt --tree tests/data/grid24.tree --mode h100 --kernel block --wpc 4 --random-slices 8
 run "F block grid28 slicemoves wpc4" -i tests/data/grid28.txt --tree tests/data/grid28.tree --mode h100 --kernel block --wpc 4 --slicing --sc-target 20
+# G: parallel sweep order (--kernel par: independent sets of non-adjacent nodes per phase; options --par-band,
+# --par-follow), against the CPU reference of the same order (no other kernel implements it, so no cross-kernel check)
+for inst in sat100 reg3_250 lat14 grid24 grid45; do
+  for wpc in 1 4 8; do
+    for mode in tc h100; do
+      run "G par $inst wpc$wpc $mode" -i tests/data/$inst.txt --tree tests/data/$inst.tree --mode $mode --kernel par --wpc $wpc
+    done
+  done
+done
+for mode in tc gpu h100; do
+  run "G par sq46 sweep wpc8 $mode" -i tests/data/sq46.txt --tree tests/data/sq46.tree --mode $mode --kernel par --wpc 8
+done
+run "G par sat100 random init wpc2" -i tests/data/sat100.txt --mode tc --kernel par --wpc 2
+run "G par reg3_250 coop forced wpc4" -i tests/data/reg3_250.txt --tree tests/data/reg3_250.tree --mode h100 --kernel par --wpc 4 --coop-max 32 --coop-min-units 1 --coop-full 8
+run "G par grid45 coop-full 32 wpc2" -i tests/data/grid45.txt --tree tests/data/grid45.tree --mode tc --kernel par --wpc 2 --coop-full 32
+run "G par grid24 wide wpc4" -i tests/data/grid24.txt --tree tests/data/grid24.tree --mode h100 --kernel par --wpc 4 --wide
+run "G par grid24 slices wpc4" -i tests/data/grid24.txt --tree tests/data/grid24.tree --mode h100 --kernel par --wpc 4 --random-slices 8
+run "G par sq46 sweep sums off" -i tests/data/sq46.txt --tree tests/data/sq46.tree --mode tc --kernel par --wpc 8 --no-sum
+run "G par sat100 band4 wpc4" -i tests/data/sat100.txt --tree tests/data/sat100.tree --mode tc --kernel par --wpc 4 --par-band 4
+run "G par grid45 band16 follow wpc8" -i tests/data/grid45.txt --tree tests/data/grid45.tree --mode h100 --kernel par --wpc 8 --par-band 16 --par-follow
+run "G par sq46 sweep band8 wpc8" -i tests/data/sq46.txt --tree tests/data/sq46.tree --mode tc --kernel par --wpc 8 --par-band 8
+run "G par reg3_250 follow wpc2" -i tests/data/reg3_250.txt --tree tests/data/reg3_250.tree --mode tc --kernel par --wpc 2 --par-follow
+run "G par grid45 sums forced coop-chunks 1 wpc8" -i tests/data/grid45.txt --tree tests/data/grid45.tree --mode tc --kernel par --wpc 8 --sums --coop-chunks 1
+run "G par grid28 slicemoves wpc4" -i tests/data/grid28.txt --tree tests/data/grid28.tree --mode h100 --kernel par --wpc 4 --slicing --sc-target 20
 [ $fail = 0 ] && echo "ALL CHECKS PASSED" || echo "SOME CHECKS FAILED"

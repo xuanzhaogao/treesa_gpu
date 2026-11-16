@@ -5,7 +5,8 @@ large_compare_gpu_v3.jsonl: new kernels (cooperative visits, chunk summaries, on
 automatic choices ("GPU v2" rows).  large_compare_gpu_v2.jsonl: an intermediate build of the new kernels (16 warps
 per chain, cooperative visits also up to 512 labels); used only for configurations not in v3 (72 x 500).
 large_compare_h100_v1 / _v2.jsonl: original / intermediate new kernels on the H100 PCIe.  The trees depend only on the
-seed, so every build and GPU must give the same tc."""
+seed (and the sweep order), so every build and GPU must give the same tc.  large_compare_gpu_par.jsonl: the parallel
+sweep order (order "par", kernel par; "GPU par" rows): same moves, different order, so different trees."""
 import collections, json, os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -26,12 +27,14 @@ have = {key(r) for r in v3}
 v2mid = [dict(r, v2=True, mid=True) for r in load("large_compare_gpu_v2.jsonl")
          if "error" not in r and r.get("method") == "gpu" and key(r) not in have]
 rows += v3 + v2mid
+par = [dict(r, par=True) for r in load("large_compare_gpu_par.jsonl") if "error" not in r]
+rows += par
 
 
 def label(r):
     m = r["method"]
     if m == "gpu":
-        s = f"GPU{' v2' if r.get('v2') else ''} {r['scheme']} {r['nchains']}x{r['niters']}{'†' if r.get('mid') else ''}"
+        s = f"GPU{' v2' if r.get('v2') else ''}{' par' if r.get('par') else ''} {r['scheme']} {r['nchains']}x{r['niters']}{'†' if r.get('mid') else ''}"
         if r.get("init") == "sweep":
             s += f" from sweep, beta0 {r.get('beta0')}"
         return s
@@ -54,11 +57,12 @@ for r in rows:
     if "error" not in r and label(r) not in methods:
         methods.append(label(r))
 order = ["row-major sweep", "omeco greedy"] + [m for m in methods if m.startswith("omeco TreeSA")] + \
-        [m for m in methods if m.startswith("GPU") and not m.startswith("GPU v2")] + \
-        [m for m in methods if m.startswith("GPU v2")]
+        [m for m in methods if m.startswith("GPU") and not m.startswith("GPU v2") and not m.startswith("GPU par")] + \
+        [m for m in methods if m.startswith("GPU v2")] + [m for m in methods if m.startswith("GPU par")]
 out = ["# Large networks: GPU TreeSA (Quadro RTX 6000) vs omeco (12 threads, workergpu165 CPU)", "",
        "Cells: tc (log2) / sc / wall s; pure-tc objective (sc_target 10000); single runs, GPU seed 1. Best tc per instance in bold. GPU wall includes process start and greedy init. "
-       "GPU: original kernels; GPU v2: new kernels (same trees). †: intermediate build of the new kernels (16 warps per chain).", "",
+       "GPU: original kernels; GPU v2: new kernels (same trees). †: intermediate build of the new kernels (16 warps per chain). "
+       "GPU par: parallel sweep order (kernel par), 72 chains.", "",
        "| method | " + " | ".join(f"{i} (m={meta[i][0]}, {meta[i][1]} labels)" for i in inst) + " |",
        "|---|" + "---:|" * len(inst)]
 best = {i: min(r["tc"] for r in by[i].values() if r["method"] != "sweep" or True) for i in inst}
@@ -94,7 +98,7 @@ if os.path.exists(h):
     print("\n".join(t))
 
 # new kernels vs the original ones on the same GPU, same configurations and seeds (trees must be identical)
-old = {key(r): r for r in rows if r["method"] == "gpu" and "error" not in r and not r.get("v2")}
+old = {key(r): r for r in rows if r["method"] == "gpu" and "error" not in r and not r.get("v2") and not r.get("par")}
 new = [r for r in rows if r.get("v2") and "error" not in r]
 if new:
     t = ["", "## New kernels vs the original ones (RTX 6000, same configurations and seeds)", "",
@@ -128,5 +132,22 @@ if h2:
         w_rtx = f"{x['wall']:.0f} s" if x else "–"
         t.append(f"| {r['instance']} | {label(r)[4:]} | {r['tc']:.2f}{' **differ**' if bad else ''} | {w_old} | "
                  f"{r['wall']:.0f} s | {sp} | {w_rtx} |")
+    open(os.path.join(R, "large_summary.md"), "a").write("\n".join(t) + "\n")
+    print("\n".join(t))
+
+# parallel sweep order vs the pre-order sweep (new kernels), same configurations and seed: different trees
+pre = {key(r): r for r in rows if r.get("v2") and not r.get("mid") and "error" not in r}
+if par:
+    t = ["", "## Parallel sweep order (kernel par) vs the pre-order sweep (GPU v2), RTX 6000, same configurations and seed", "",
+         "Same moves and random numbers, different visiting order, so different trees (single seed: see the report for "
+         "4-seed means at equal sweeps and at matched time).", "",
+         "| instance | config | tc pre-order / par | wall pre-order | wall par | speed-up | kernel s pre-order / par |",
+         "|---|---|---|---:|---:|---:|---:|"]
+    for r in sorted(par, key=lambda r: (r.get("init") or "", r["instance"], r["niters"])):
+        q = pre.get(key(r))
+        if q is None:
+            continue
+        t.append(f"| {r['instance']} | {label(r)[8:]} | {q['tc']:.2f} / {r['tc']:.2f} | {q['wall']:.0f} s | {r['wall']:.0f} s | "
+                 f"{q['wall'] / r['wall']:.2f}x | {q.get('kernel_s') or 0:.1f} / {r.get('kernel_s') or 0:.1f} |")
     open(os.path.join(R, "large_summary.md"), "a").write("\n".join(t) + "\n")
     print("\n".join(t))

@@ -817,6 +817,185 @@ __global__ void __launch_bounds__(512) k_block(Params P, uint32_t* __restrict__ 
   }
 }
 
+// -------------------------------------------------------------------------------------
+// Kernel "par": the parallel sweep order (common.h, par_pri).  One block of wpc warps per chain.
+// Shared memory: priority (0 = visited this sweep), parent and the phase's work list, uint16 per
+// internal node.  Each phase scans all internal nodes for the independent set (unvisited nodes
+// whose key beats their unvisited parent and internal children), then visits it with G lanes per
+// node (G = 32 / nextpow2(nodes per warp), within [coop_min, coop_max]).  Accepted moves update
+// the parents of the two nodes that changed places.  Path-like trees take O(log n) phases per
+// sweep instead of O(n) frontier steps.  Slice moves run on warp 0 after each sweep.
+// -------------------------------------------------------------------------------------
+template <int W, int MODE>
+__global__ void __launch_bounds__(512) k_par(Params P, uint32_t* __restrict__ rec, const uint32_t* __restrict__ leaf,
+                                             const uint32_t* __restrict__ leafsum, int nchains, float beta,
+                                             uint32_t sweep0, int nsweeps, unsigned long long* stats) {
+  extern __shared__ uint4 smem4[];
+  const int nint = P.nint, m = P.m;
+  const int nint2 = (nint + 7) & ~7;
+  uint16_t* pri = reinterpret_cast<uint16_t*>(smem4);
+  uint16_t* par = pri + nint2;
+  uint16_t* wl = par + nint2;
+  uint32_t* dw = reinterpret_cast<uint32_t*>(wl + nint2);  // par_band: depth << 16 | ancestor (pointer jumping)
+  __shared__ int cnt[2];
+  __shared__ int chg[2];
+  __shared__ int csum[2];  // coop_full < 0 (auto with chunk summaries): nonzero chunks of the phase's nodes
+  const int NWARP = blockDim.x >> 5, lane = threadIdx.x & 31, wid = threadIdx.x >> 5;
+  const int c = blockIdx.x;
+  if (c >= nchains) return;  // whole block
+  const int NW = (W > 0) ? W : P.nw;
+  uint32_t* base = rec + (size_t)c * P.chain_words;
+  uint32_t* lab = base;
+  uint32_t* ch = base + (size_t)nint * NW;
+  uint32_t* S = base + P.s_off;
+  const uint32_t* Sm = P.slicing ? S : nullptr;
+  uint32_t* sumb = P.nsum ? base + P.sum_off : nullptr;
+  int np = 0, na = 0, nst = 0, nv = 0, nsp = 0, nsa = 0;
+  long long nbusy = 0;
+  // parents from the children words
+  for (int i = threadIdx.x; i < nint; i += blockDim.x) {
+    uint32_t cw = ch[i];
+    int l = (int)(cw & 0xFFFFu), r = (int)(cw >> 16);
+    if (l >= m) par[l - m] = (uint16_t)(m + i);
+    if (r >= m) par[r - m] = (uint16_t)(m + i);
+  }
+  if (threadIdx.x == 0) { par[nint - 1] = 0xFFFFu; cnt[0] = 0; cnt[1] = 0; chg[0] = 0; chg[1] = 0; csum[0] = 0; csum[1] = 0; }
+  const uint32_t hc = mix32((uint32_t)c ^ P.key0);
+  for (int s = 0; s < nsweeps; s++) {
+    const uint32_t hs = mix32((sweep0 + s) * 0x85EBCA77u + hc);
+    for (int i = threadIdx.x; i < nint; i += blockDim.x)
+      pri[i] = (uint16_t)((mix32((uint32_t)(m + i) * 0x9E3779B1u + hs) >> 16) | 1u);
+    if (P.par_band > 0) {
+      // depths by pointer jumping on (depth to ancestor, ancestor) words; a 32-bit word is read and written whole,
+      // so an update that sees an already-advanced ancestor word still keeps depth(v) = d + depth(anc)
+      __syncthreads();
+      for (int i = threadIdx.x; i < nint; i += blockDim.x) dw[i] = par[i] == 0xFFFFu ? 0xFFFFu : (0x10000u | par[i]);
+      __syncthreads();
+      for (int r = 0;; r++) {
+        int* cg = &chg[r & 1];
+        bool any = false;
+        for (int i = threadIdx.x; i < nint; i += blockDim.x) {
+          uint32_t w = dw[i], a = w & 0xFFFFu;
+          if (a != 0xFFFFu) {
+            uint32_t w2 = dw[a - m];
+            dw[i] = ((w & 0xFFFF0000u) + (w2 & 0xFFFF0000u)) | (w2 & 0xFFFFu);
+            any = true;
+          }
+        }
+        if (any) *cg = 1;
+        if (threadIdx.x == 0) chg[(r + 1) & 1] = 0;
+        __syncthreads();
+        const int more = *cg;
+        __syncthreads();  // everyone has read the flag before the next round's thread 0 clears it
+        if (!more) break;
+      }
+      const int L = P.par_band;
+      for (int i = threadIdx.x; i < nint; i += blockDim.x)
+        pri[i] = (uint16_t)((((uint32_t)((L - 1 - (int)(dw[i] >> 16) % L) & 15)) << 12) | (pri[i] & 0x0FFEu) | 1u);
+    }
+    __syncthreads();
+    for (int ph = 0;; ph++) {
+      int* cn = &cnt[ph & 1];
+      // scan: the phase's independent set
+      for (int i0 = 0; i0 < nint; i0 += blockDim.x) {
+        int i = i0 + threadIdx.x;
+        bool act = false;
+        if (i < nint && pri[i] != 0) {
+          uint32_t key = ((uint32_t)pri[i] << 16) | (uint32_t)(m + i);
+          act = true;
+          int p = par[i];
+          if (p != 0xFFFF && pri[p - m] != 0 && (((uint32_t)pri[p - m] << 16) | (uint32_t)p) > key) act = false;
+          uint32_t cw = ch[i];
+          int l = (int)(cw & 0xFFFFu), r = (int)(cw >> 16);
+          if (act && l >= m && pri[l - m] != 0 && (((uint32_t)pri[l - m] << 16) | (uint32_t)l) > key) act = false;
+          if (act && r >= m && pri[r - m] != 0 && (((uint32_t)pri[r - m] << 16) | (uint32_t)r) > key) act = false;
+        }
+        unsigned b = __ballot_sync(0xFFFFFFFFu, act);
+        int pos = 0;
+        if (lane == 0 && b) pos = atomicAdd(cn, __popc(b));
+        pos = __shfl_sync(0xFFFFFFFFu, pos, 0);
+        if (act) wl[pos + __popc(b & ((1u << lane) - 1u))] = (uint16_t)(m + i);
+        if (P.coop_full < 0 && b) {  // nonzero 16-byte chunks of the active nodes' label sets
+          int nz = 0;
+          if (act)
+            for (int q = 0; q < P.nsum; q++) nz += __popc(sumb[(size_t)i * P.nsum + q]);
+          for (int o = 16; o > 0; o >>= 1) nz += __shfl_xor_sync(0xFFFFFFFFu, nz, o);
+          if (lane == 0) atomicAdd(&csum[ph & 1], nz);
+        }
+      }
+      if (threadIdx.x == 0) { cnt[(ph + 1) & 1] = 0; csum[(ph + 1) & 1] = 0; }
+      __syncthreads();
+      const int k = *cn;
+      if (k == 0) break;
+      if (threadIdx.x == 0) nst++;
+      // visits: G lanes per node
+      int per = (k + NWARP - 1) / NWARP;
+      int lgk = 32 - __clz(min(32, per) - 1);
+      int Gf = P.coop_full;
+      if (Gf < 0) {  // auto with summaries (within coop_min / coop_max)
+        int u = csum[ph & 1] / (P.coop_cpl * k);  // ~coop_cpl nonzero chunks per lane, 1..8 lanes
+        Gf = u >= 8 ? 8 : u >= 4 ? 4 : u >= 2 ? 2 : 1;
+        Gf = min(max(Gf, P.coop_min), P.coop_max);
+      }
+      int G = per > 32 ? Gf : min(max(32 >> lgk, P.coop_min), P.coop_max), lg = 31 - __clz(G);
+      const int npw = 32 >> lg;  // nodes per warp per round
+      int j0 = lane >> lg, t = lane & (G - 1);
+      for (int b0 = wid * npw; b0 < k; b0 += NWARP * npw) {
+        int j = b0 + j0;
+        bool act = j < k;
+        nv += act && t == 0;
+        nbusy += act;
+        if (act) {
+          int v = wl[j];
+          uint32_t old = ch[v - m], cw;
+          const bool rev = (pri[v - m] & 1u) == 0;  // a follow-up visit (par_follow): its own random numbers
+          const uint32_t sw = (sweep0 + s) | (rev ? 0x80000000u : 0u);
+          const unsigned gm = (G == 32) ? 0xFFFFFFFFu : (((1u << G) - 1u) << (j0 * G));
+          if (G == 1) cw = visit<W, MODE>(lab, ch, leaf, Sm, sumb, leafsum, P, v, beta, sw, (uint32_t)c, np, na);
+          else cw = visit_coop<W, MODE>(lab, ch, leaf, Sm, sumb, leafsum, P, v, beta, sw, (uint32_t)c, G, t, gm, np, na);
+          __syncwarp(gm);  // the group has read pri[v] before lane 0 rewrites it
+          if (t == 0) {
+            if (cw != old) {  // accepted: O (old child) moved under the pivot Pn, M (grandchild) moved up to v
+              bool s1 = (old & 0xFFFFu) == (cw & 0xFFFFu);  // slot 1 (right) changed
+              int On = s1 ? (int)(old >> 16) : (int)(old & 0xFFFFu);
+              int Mn = s1 ? (int)(cw >> 16) : (int)(cw & 0xFFFFu);
+              int Pn = s1 ? (int)(old & 0xFFFFu) : (int)(old >> 16);
+              if (On >= m) par[On - m] = (uint16_t)Pn;
+              if (Mn >= m) par[Mn - m] = (uint16_t)v;
+              // par_follow: the pivot got a new child (O); if it was already visited in this sweep, visit it once
+              // more (as the pre-order sweep would).  Race-free: the pivot is v's child, so not in this phase.
+              if (P.par_follow && !rev && pri[Pn - m] == 0) pri[Pn - m] = (uint16_t)par_follow_pri((uint32_t)Pn, hs);
+            }
+            pri[v - m] = 0;
+          }
+        }
+      }
+      __syncthreads();
+    }
+    if (P.slice_moves > 0 && (sweep0 + s + 1) % (uint32_t)P.slice_every == 0) {
+      if (wid == 0) slice_step<W, MODE>(P, lab, ch, S, leaf, beta, sweep0 + s, (uint32_t)c, lane, nsp, nsa);
+      __syncthreads();
+    }
+  }
+  for (int o = 16; o > 0; o >>= 1) {
+    np += __shfl_xor_sync(0xFFFFFFFFu, np, o);
+    na += __shfl_xor_sync(0xFFFFFFFFu, na, o);
+    nv += __shfl_xor_sync(0xFFFFFFFFu, nv, o);
+    nbusy += __shfl_xor_sync(0xFFFFFFFFu, nbusy, o);
+  }
+  if (lane == 0) {
+    atomicAdd(&stats[0], (unsigned long long)np);
+    atomicAdd(&stats[1], (unsigned long long)na);
+    if (wid == 0) {
+      atomicAdd(&stats[2], (unsigned long long)nst);
+      atomicAdd(&stats[4], (unsigned long long)nsp);
+      atomicAdd(&stats[5], (unsigned long long)nsa);
+    }
+    atomicAdd(&stats[3], (unsigned long long)nv);
+    atomicAdd(&stats[6], (unsigned long long)nbusy);
+  }
+}
+
 // Per-chain global energy (one warp per chain): per-slice lcost, sc, |S|.
 template <int W, int MODE>
 __global__ void k_energy(Params P, const uint32_t* __restrict__ rec, const uint32_t* __restrict__ leaf, int nchains,
@@ -1088,14 +1267,14 @@ static int greedy_repair(const Inst& I, int NW, const Params& P, const uint32_t*
 // Options / driver
 // =====================================================================================
 struct Opts {
-  std::string inst, tree, out, kernel = "auto", scheme = "indep", betas = "0.01:0.05:15";
+  std::string inst, tree, out, kernel = "auto", scheme = "indep", betas = "0.01:0.05:15", order = "par";
   std::string betas2;  // optional stage 2: continue the population in mode2 on this schedule
   std::string init_slices;  // comma-separated label ids sliced initially in every chain
   int niters2 = -1;
   int nchains = 1024, niters = 50, block = 0, wpb = 0, lpc = 32, eval_every = 1, ref_chains = 8, mode = 0;
   bool check = false, quiet = false, cross = true, wide = false, slicing = false, no_sum = false, force_sum = false;
   int slice_moves = 1, slice_every = 1, max_slices = 0, random_slices = 0;
-  int coop_max = 0, coop_min_units = -1, coop_min = 1, wpc = 0;  // lanes per node visit (warp kernel): 0 auto (32 wide, off for W > 0), 1 off;
+  int coop_max = 0, coop_min_units = -1, coop_min = 1, coop_full = 0, coop_cpl = 2, par_follow = 0, par_band = 0, wpc = 0;  // lanes per node visit (warp kernel): 0 auto (32 wide, off for W > 0), 1 off;
                                                        // min units per lane (-1 auto); lanes per node even when >= 32 are ready
   double sc_target = 20.0, sc_weight = 1.0, trunc_frac = 0.25;
   uint64_t seed = 1;
@@ -1145,7 +1324,7 @@ static void usage() {
           "  [--stage2-betas SPEC [--stage2-niters K] [--stage2-mode gpu|h100]]  (continue the population)\n"
           "  [--sc-target x] [--sc-weight y] [--scheme indep|pa|trunc] [--trunc-frac f]\n"
           "  [--slicing [--slice-moves k] [--slice-every s] [--max-slices n] [--init-slices l1,l2,..]]\n"
-          "  [--kernel auto|seq|seqsm|warp|warpsm|block [--wpc n]] [--lpc 32|16|8] [--coop-max G] [--coop-min G0] [--coop-min-units u] [--wide] [--sums|--no-sum] [--block B] [--wpb W] [--seed s]\n"
+          "  [--order par|preorder] [--kernel auto|seq|seqsm|warp|warpsm|block|par [--wpc n]] [--lpc 32|16|8] [--coop-max G] [--coop-min G0] [--coop-full G1] [--par-follow] [--par-band L] [--coop-min-units u] [--wide] [--sums|--no-sum] [--block B] [--wpb W] [--seed s]\n"
           "  [--eval-every k] [--out result.json] [--check [--ref-chains R] [--random-slices k]] [--quiet]\n");
   exit(1);
 }
@@ -1176,6 +1355,7 @@ static Opts parse(int argc, char** argv) {
     else if (a == "--scheme") o.scheme = nx();
     else if (a == "--trunc-frac") o.trunc_frac = std::stod(nx());
     else if (a == "--kernel") o.kernel = nx();
+    else if (a == "--order") o.order = nx();
     else if (a == "--block") o.block = std::stoi(nx());
     else if (a == "--wpb") o.wpb = std::stoi(nx());
     else if (a == "--lpc") o.lpc = std::stoi(nx());
@@ -1192,6 +1372,10 @@ static Opts parse(int argc, char** argv) {
     else if (a == "--coop-max") o.coop_max = std::stoi(nx());
     else if (a == "--coop-min-units") o.coop_min_units = std::stoi(nx());
     else if (a == "--coop-min") o.coop_min = std::stoi(nx());
+    else if (a == "--coop-full") o.coop_full = std::stoi(nx());
+    else if (a == "--coop-chunks") o.coop_cpl = std::max(1, std::stoi(nx()));
+    else if (a == "--par-follow") o.par_follow = 1;
+    else if (a == "--par-band") o.par_band = std::stoi(nx());
     else if (a == "--wpc") o.wpc = std::stoi(nx());
     else if (a == "--wide") o.wide = true;
     else if (a == "--no-sum") o.no_sum = true;
@@ -1221,7 +1405,7 @@ template <int W>
 struct Runner {
   const Inst& I;
   const Opts& O;
-  Params P;
+  Params P{};  // zero-initialized: fields a kernel does not use stay 0
   int NW;
   std::vector<uint32_t> h_leaf, h_leafsum;
   int nchains;
@@ -1281,6 +1465,10 @@ struct Runner {
       for (int l : I.ixs[i]) h_leaf[(size_t)i * NW + (l >> 5)] |= 1u << (l & 31);
     h_leafsum.assign((size_t)I.m * std::max(1, P.nsum), 0);
     if (P.nsum) fill_sums(h_leaf.data(), I.m, h_leafsum.data());
+    if (O.order != "par" && O.order != "preorder") { fprintf(stderr, "--order par|preorder\n"); exit(1); }
+    // sweep order "par" (default): kernel par.  "preorder" (the Julia sweep, bit-identical in all other kernels):
+    // automatic choice among warpsm / warp / block below.  An explicit --kernel decides the order.
+    if (kernel == "auto" && O.order == "par" && O.lpc == 32) kernel = "par";
     if (kernel == "auto") {
       // Measured on the RTX 6000 (bench/results/throughput_rtx6000.txt): staging chains in shared
       // memory (warpsm) wins when a full block of 8 chains fits, or when the population no longer
@@ -1307,11 +1495,26 @@ struct Runner {
       int units = W > 0 ? W : NW / 4;
       int mu = O.coop_min_units > 0 ? O.coop_min_units : (W > 0 ? 2 : 1);
       int cap = std::min(O.coop_max > 0 ? O.coop_max : (W > 0 ? 1 : 32), std::max(1, units / mu));
-      bool warpk = kernel == "warp" || kernel == "warpsm" || kernel == "block";
+      bool warpk = kernel == "warp" || kernel == "warpsm" || kernel == "block" || kernel == "par";
       P.coop_max = (warpk && O.lpc == 32) ? std::min(32, p2floor(std::max(1, cap))) : 1;
       P.coop_min = std::min(P.coop_max, p2floor(std::max(1, O.coop_min)));
+      // kernel par, phases with more than 32 nodes per warp: 8 lanes per node for chains of >= 512 KB, else 2
+      // (RTX 6000, 72 chains, 10 sweeps/level: grid45 / reg3_2000 / sq64 1.3-2.2x faster with 8 than with 1,
+      // grid32 / sq32 / reg3_1000 best with 2, 16 never better than 8)
+      P.coop_full = std::min(P.coop_max, O.coop_full > 0 ? p2floor(O.coop_full) : (chain_bytes() >= (512u << 10) ? 8 : 2));
+      P.coop_full = std::max(P.coop_full, P.coop_min);
+      // with chunk summaries the work per visit varies with the label density (dense random trees when hot, few
+      // nonzero chunks on cold lattice trees): auto picks G per phase from the active nodes' nonzero chunks (-1),
+      // about coop_cpl (--coop-chunks, default 2) of them per lane.  RTX 6000, 72 chains: the fixed rule (8) made
+      // the cold refinement of the row-major sweep 2.4-3x slower (sq48 0.58 -> 1.79 s, sq64 1.43 -> 3.48 s); with
+      // this rule 0.66 / 1.54 s, and hot runs within 13 % of the best fixed G (sq48 2, sq64 8)
+      if (O.coop_full <= 0 && P.nsum > 0 && P.coop_max > 1) P.coop_full = -1;
+      P.par_follow = O.par_follow;
+      P.coop_cpl = O.coop_cpl;
+      P.par_band = O.par_band;
+      if (P.par_band == 1 || P.par_band > 16) { fprintf(stderr, "--par-band L: 0 (off) or 2..16\n"); exit(1); }
     }
-    if (kernel == "block") {
+    if (kernel == "block" || kernel == "par") {
       // warps per chain: --wpc (at most 16), or ~16 warps per SM and at most 8 per chain.  Measured on the RTX 6000
       // (72 SMs; 8 networks of 1000-8000 tensors): with 72 and 144 chains 8 per chain is best or within 9 %
       // (16 per chain: 5-25 % slower); with 288 / 576 chains 4 / 2 per chain is best or within 5 % on 3 of 4
@@ -1319,6 +1522,10 @@ struct Runner {
       int nsm = 0;
       CK(cudaDeviceGetAttribute(&nsm, cudaDevAttrMultiProcessorCount, 0));
       int want = O.wpc > 0 ? O.wpc : std::min(8, std::max(1, nsm * 16 / std::max(1, nchains)));
+      // kernel par at many chains: at least 2 warps per chain (4 from 600 internal nodes).  RTX 6000, 576 / 4608
+      // chains: 1 warp per chain is 1.2-1.6x slower than 2 (32-thread blocks cap residency at 16 warps per SM);
+      // lat14 (783 nodes) and sat500 / grid32 at 1152-2304 chains are fastest with 4
+      if (kernel == "par" && O.wpc <= 0) want = std::max(want, P.nint >= 600 ? 4 : 2);
       wpc = 1;
       while (2 * wpc <= std::min(want, 16)) wpc *= 2;
     }
@@ -1464,6 +1671,18 @@ struct Runner {
       }
       if (smem > (size_t)dyn_max) { fprintf(stderr, "block: work list does not fit in shared memory\n"); exit(1); }
       k_block<W, MODE><<<nchains, 32 * wpc, smem>>>(P, rec, d_leaf, d_leafsum, nchains, beta, sweep0, nsweeps, d_stats);
+    } else if (kernel == "par") {
+      // one block of wpc warps per chain; priority, parent and work list (uint16 per internal node) in shared memory
+      size_t smem = (size_t)((P.nint + 7) & ~7) * (P.par_band > 0 ? 10 : 6);
+      static int dyn_max = -1;
+      if (dyn_max < 0) {
+        cudaFuncAttributes fa;
+        CK(cudaFuncGetAttributes(&fa, k_par<W, MODE>));
+        dyn_max = g_smem_optin - (int)fa.sharedSizeBytes;
+        CK(cudaFuncSetAttribute(k_par<W, MODE>, cudaFuncAttributeMaxDynamicSharedMemorySize, dyn_max));
+      }
+      if (smem > (size_t)dyn_max) { fprintf(stderr, "par: node arrays do not fit in shared memory\n"); exit(1); }
+      k_par<W, MODE><<<nchains, 32 * wpc, smem>>>(P, rec, d_leaf, d_leafsum, nchains, beta, sweep0, nsweeps, d_stats);
     } else {
       bool sm = kernel == "warpsm";
       if constexpr (W == 0) {  // wide path: one warp per chain only
@@ -1669,8 +1888,9 @@ struct Runner {
       for (int l = 0; l < I.nlab; l++)
         if (O.slicing && (S[l >> 5] >> (l & 31) & 1u)) fprintf(f, "%s%d", k++ ? "," : "", l);
     }
-    fprintf(f, "],\n \"t_anneal\": %.6f, \"t_init\": %.6f, \"kernel_s\": %.6f, \"proposals\": %llu, \"accepts\": %llu, \"warp_steps\": %llu, \"node_visits\": %llu, \"slice_proposals\": %llu, \"slice_accepts\": %llu, \"busy_lanes\": %llu, \"coop_max\": %d, \"coop_min\": %d, \"nsum\": %d, \"wpc\": %d,\n",
-            t_anneal, t_init, kernel_ms / 1e3, stats[0], stats[1], stats[2], stats[3], stats[4], stats[5], stats[6], P.coop_max, P.coop_min, P.nsum, wpc);
+    fprintf(f, "],\n \"t_anneal\": %.6f, \"t_init\": %.6f, \"kernel_s\": %.6f, \"proposals\": %llu, \"accepts\": %llu, \"warp_steps\": %llu, \"node_visits\": %llu, \"slice_proposals\": %llu, \"slice_accepts\": %llu, \"busy_lanes\": %llu, \"coop_max\": %d, \"coop_min\": %d, \"coop_full\": %d, \"par_follow\": %d, \"par_band\": %d, \"nsum\": %d, \"wpc\": %d, \"order\": \"%s\",\n",
+            t_anneal, t_init, kernel_ms / 1e3, stats[0], stats[1], stats[2], stats[3], stats[4], stats[5], stats[6], P.coop_max, P.coop_min,
+            P.coop_full, P.par_follow, P.par_band, P.nsum, wpc, kernel == "par" ? "par" : "preorder");
     fprintf(f, " \"nchains\": %d, \"niters\": %d, \"nlevels\": %zu, \"total_sweeps\": %u, \"W\": %d, \"nw\": %d, \"lpc\": %d, \"kernel\": \"%s\", \"scheme\": \"%s\", \"mode\": %d, \"nresample\": %d,\n",
             nchains, O.niters, betas.size(), sweep_ctr, W, NW, O.lpc, kernel.c_str(), O.scheme.c_str(), O.mode, nresample);
     if (staged)
@@ -1751,7 +1971,7 @@ struct Runner {
     printf("  [2] GPU energy kernel vs host double: max |dlog2cost| = %.3g, sc/|S| mismatches %d\n", maxd, scbad);
     // (3) the other kernel family from the same initial state
     int xdiff = -1;
-    if (O.cross && P.slice_moves == 0) {
+    if (O.cross && P.slice_moves == 0 && kernel != "par") {
       std::string other = (kernel == "seq" || kernel == "seqsm") ? "warp" : "seq";
       std::string saved = kernel;
       kernel = other;
@@ -1792,7 +2012,11 @@ struct Runner {
       for (size_t lev = 0; lev < betas.size(); lev++)
         for (int it = 0; it < O.niters; it++) {
           uint32_t sw = (uint32_t)(lev * O.niters + it);
-          if (O.mode == 0) ref_optimize_subtree<0>(T, 2 * I.m - 2, betas[lev], sw, (uint32_t)c, P, rp, ra);
+          if (kernel == "par") {
+            if (O.mode == 0) ref_par_sweep<0>(T, betas[lev], sw, (uint32_t)c, P, rp, ra);
+            else if (O.mode == 1) ref_par_sweep<1>(T, betas[lev], sw, (uint32_t)c, P, rp, ra);
+            else ref_par_sweep<2>(T, betas[lev], sw, (uint32_t)c, P, rp, ra);
+          } else if (O.mode == 0) ref_optimize_subtree<0>(T, 2 * I.m - 2, betas[lev], sw, (uint32_t)c, P, rp, ra);
           else if (O.mode == 1) ref_optimize_subtree<1>(T, 2 * I.m - 2, betas[lev], sw, (uint32_t)c, P, rp, ra);
           else ref_optimize_subtree<2>(T, 2 * I.m - 2, betas[lev], sw, (uint32_t)c, P, rp, ra);
         }

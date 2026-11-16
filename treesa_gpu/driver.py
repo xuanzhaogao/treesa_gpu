@@ -130,10 +130,10 @@ def julia_betas(start=0.01, step=0.05, stop=15.0):
 # main entry point
 # ---------------------------------------------------------------------------------------------
 def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_weight=1.0, mode="tc",
-             init="greedy", seed=1, scheme="indep", kernel="auto", trunc_frac=0.25, eval_every=1,
+             init="greedy", seed=1, scheme="indep", order="par", kernel="auto", trunc_frac=0.25, eval_every=1,
              gpu_model=None, h100_model=None, wpb=0, block=0, lpc=32, init_tree=None, stage2_betas=None,
              stage2_niters=None, slicing=False, slice_moves=1, slice_every=1, max_slices=0, init_slices=None,
-             wide=False, verbose=False, timeout=3600, device=None, coop_max=0, coop_min_units=0, coop_min=1, chunk_sums=None, wpc=0, **old_names):
+             wide=False, verbose=False, timeout=3600, device=None, coop_max=0, coop_min_units=0, coop_min=1, coop_full=0, coop_chunks=0, par_follow=False, par_band=0, chunk_sums=None, wpc=0, **old_names):
     """Run GPU TreeSA.  Returns (tree_dict, info).
 
     slicing: anneal a slice set S together with the tree (see README).  Then ``tree`` is the tree of
@@ -159,9 +159,23 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
     scheme: "indep" (independent chains, best-of-N) | "pa" (population annealing, resampling after
             every evaluated level) | "trunc" (replace worst ``trunc_frac`` by copies of the best)
     device: GPU id for this run (sets CUDA_VISIBLE_DEVICES for the binary); see also optimize_multi.
-    kernel: "auto" (warp per chain; chains staged in shared memory when the population exceeds L2)
-            | "warp" | "warpsm" | "seq" | "seqsm" | "block" (one thread block of ``wpc`` warps per chain, 0: auto, so
-            that few long chains fill the GPU);  lpc = lanes per chain for warp kernels (32, 16, 8)
+    order:  sweep order. "par" (default): every sweep visits the internal nodes in phases, each phase an
+            independent set of nodes no two of which are parent and child (their moves commute), chosen by
+            random priorities: O(log n) phases per sweep instead of O(depth) steps, so path-like trees no
+            longer run one node at a time (kernel "par").  "preorder": the Julia pre-order sweep, bit-identical
+            to omeco/OMEinsumContractionOrders for the same random numbers (kernels below; "auto" picks one).
+            par_follow: an accepted move re-visits the pivot child if the sweep already visited it (closer
+            to the pre-order sweep per sweep; slower per unit of time).  par_band=L (2..16): priorities top-down
+            inside bands of L tree levels (depth at the start of the sweep), ~L phases per sweep.  Both off by
+            default: neither won at matched wall time.
+            coop_full: lanes per node when a phase has more than 32 nodes per warp (0: auto = 8 for chains of
+            >= 512 KB, else 2; with chunk summaries chosen per phase for ~coop_chunks nonzero chunks per lane,
+            default 2).  Results do not depend on the lane counts.
+    kernel: "auto" (order "par": "par"; order "preorder": warp per chain, chains staged in shared memory
+            when the population exceeds L2, one block per chain when there are few chains)
+            | "par" | "warp" | "warpsm" | "seq" | "seqsm" | "block" (one thread block of ``wpc`` warps per chain,
+            0: auto, so that few long chains fill the GPU); an explicit kernel other than "par" means order
+            "preorder";  lpc = lanes per chain for warp kernels (32, 16, 8)
     coop_max, coop_min_units: warp kernels with lpc 32 let up to coop_max lanes (0: auto = 32 above 512 labels,
             off up to 512 labels; 1: off) share one node
             visit when fewer than 32 nodes are ready, each lane taking at least coop_min_units load units
@@ -215,7 +229,7 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
     out = os.path.join(tmpdir, "out.json")
     args += ["--betas", "file:" + bf, "--nchains", str(nchains), "--niters", str(niters),
              "--sc-target", str(sc_target), "--sc-weight", str(sc_weight), "--mode", mode if mode in ("gpu", "h100") else "tc",
-             "--scheme", scheme, "--kernel", kernel, "--seed", str(seed), "--trunc-frac", str(trunc_frac),
+             "--scheme", scheme, "--order", order, "--kernel", kernel, "--seed", str(seed), "--trunc-frac", str(trunc_frac),
              "--eval-every", str(eval_every), "--out", out,
              "--gm", ",".join(str(gm[k]) for k in ("peak_ops", "bw_bits", "m0", "n0", "k0", "launch")),
              "--h100-model", ",".join(str(h100m[k]) for k in H100_KEYS)]
@@ -237,6 +251,14 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
         args += ["--coop-min-units", str(coop_min_units)]
     if coop_min != 1:
         args += ["--coop-min", str(coop_min)]
+    if coop_full:
+        args += ["--coop-full", str(coop_full)]
+    if coop_chunks:
+        args += ["--coop-chunks", str(coop_chunks)]
+    if par_follow:
+        args += ["--par-follow"]
+    if par_band:
+        args += ["--par-band", str(par_band)]
     if chunk_sums is not None:
         args += ["--sums" if chunk_sums else "--no-sum"]
     if wpc:
