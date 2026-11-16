@@ -68,6 +68,10 @@ struct Params {
   int slice_moves;  // >0: number of slice proposals after every `slice_every` sweeps (warp kernel)
   int slice_every;
   int max_slices;   // cap on |S|
+  int coop_max;     // warp kernel (LPC 32): at most this many lanes share one node visit (power of 2; 1 = off)
+  int coop_min;     // ... and at least this many (power of 2 <= coop_max), even when >= 32 nodes are ready
+  int nsum;         // wide path: 32-bit summary words per node (bit c: 16-byte chunk c of the label set is nonzero); 0 = off
+  int sum_off;      // word offset of the summaries [nint][nsum] inside a chain record
   float sc_target, sc_weight;
   uint32_t key0, key1;  // Philox key (from seed)
   // GPU-runtime cost model (mode 1), all in log2 units:

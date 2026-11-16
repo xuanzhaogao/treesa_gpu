@@ -143,9 +143,23 @@ __device__ __forceinline__ int nth_label(const uint32_t* A, const uint32_t* S, i
 // i.e. every rule swaps M and O, keeping slots, and P gets labels X = (K|O)&(M|d).
 // Stored labels are unsliced; costs use (set & ~S) (and (X & ~S) == X computed from masked sets).
 template <int W, int MODE>
+__device__ __forceinline__ uint32_t visit_coop(uint32_t* lab, uint32_t* ch, const uint32_t* __restrict__ leaf,
+                                               const uint32_t* Sm, uint32_t* sum, const uint32_t* __restrict__ leafsum,
+                                               const Params& P, int v, float beta, uint32_t sweep, uint32_t chain, int G,
+                                               int t, unsigned gm, int& nprop, int& nacc);
+
+// Chunk summaries (wide path, P.nsum > 0): bit c of a node's summary is set iff 16-byte chunk c of its
+// label set is nonzero.  A visit then touches only the chunks set in sum(K)|sum(M)|sum(O)|sum(D), which
+// contain every nonzero chunk of all six sets (P is a subset of K|M, X of K|O); an accepted move rewrites
+// those chunks of P and P's summary.  Zero chunks add nothing to the counts: results are bit-identical.
+template <int W, int MODE>
 __device__ __forceinline__ uint32_t visit(uint32_t* lab, uint32_t* ch, const uint32_t* __restrict__ leaf,
-                                          const uint32_t* Sm, const Params& P, int v, float beta, uint32_t sweep,
+                                          const uint32_t* Sm, uint32_t* sum, const uint32_t* __restrict__ leafsum,
+                                          const Params& P, int v, float beta, uint32_t sweep,
                                           uint32_t chain, int& nprop, int& nacc) {
+  if constexpr (W == 0)  // wide path: the cooperative visit with a group of one lane
+    return visit_coop<W, MODE>(lab, ch, leaf, Sm, sum, leafsum, P, v, beta, sweep, chain, 1, 0,
+                               1u << (threadIdx.x & 31), nprop, nacc);
   const int m = P.m;
   const int NW = (W > 0) ? W : P.nw;
   uint32_t chv = ch[v - m];
@@ -215,6 +229,144 @@ __device__ __forceinline__ uint32_t visit(uint32_t* lab, uint32_t* ch, const uin
     uint32_t nchv = slotP ? ((chv & 0xFFFF0000u) | (uint32_t)Mn) : ((chv & 0xFFFFu) | ((uint32_t)Mn << 16));
     ch[Pn - m] = nchp;
     ch[v - m] = nchv;
+    chv = nchv;
+  }
+  return chv;
+}
+
+// Sum the move counters over the G lanes of one group (G a power of 2; groups aligned to G lanes).
+template <int MODE>
+__device__ __forceinline__ void reduce_counts(MoveCounts& c, unsigned gm, int G) {
+  for (int o = G >> 1; o > 0; o >>= 1) {
+    c.sd += __shfl_xor_sync(gm, c.sd, o);
+    c.sp += __shfl_xor_sync(gm, c.sp, o);
+    c.sx += __shfl_xor_sync(gm, c.sx, o);
+#pragma unroll
+    for (int q = 0; q < 4; q++) {
+      c.K[q] += __shfl_xor_sync(gm, c.K[q], o);
+      if (MODE != 0) {
+        c.B[q] += __shfl_xor_sync(gm, c.B[q], o);
+        c.M[q] += __shfl_xor_sync(gm, c.M[q], o);
+        c.N[q] += __shfl_xor_sync(gm, c.N[q], o);
+      }
+    }
+  }
+}
+
+// The same proposal as visit(), shared by a group of G lanes (G = 2..32, lane t of the group):
+// every lane streams words t, t+G, ... (W > 0: 32-bit words; W == 0: 16-byte chunks) of the five
+// label sets, the integer counters are summed over the group, and every lane evaluates the same
+// energy and acceptance.  Counts are exact integers, so the result is bit-identical to visit().
+// Lanes outside the group never take part (gm = the group's lane mask).
+// lanes of a group of G take chunks c with c % G == t: within one 32-bit summary word, the bits t, t+G, ...
+__device__ __forceinline__ uint32_t group_pattern(int G) {
+  return G >= 32 ? 1u : G == 16 ? 0x00010001u : G == 8 ? 0x01010101u : G == 4 ? 0x11111111u : G == 2 ? 0x55555555u
+                                                                                                  : 0xFFFFFFFFu;
+}
+
+template <int W, int MODE>
+__device__ __forceinline__ uint32_t visit_coop(uint32_t* lab, uint32_t* ch, const uint32_t* __restrict__ leaf,
+                                               const uint32_t* Sm, uint32_t* sum, const uint32_t* __restrict__ leafsum,
+                                               const Params& P, int v, float beta, uint32_t sweep, uint32_t chain, int G,
+                                               int t, unsigned gm, int& nprop, int& nacc) {
+  const int m = P.m;
+  const int NW = (W > 0) ? W : P.nw;
+  uint32_t chv = ch[v - m];
+  int l = (int)(chv & 0xFFFFu), r = (int)(chv >> 16);
+  bool li = l >= m, ri = r >= m;
+  if (!li && !ri) return chv;
+  U4 rnd = philox4x32(U4{(uint32_t)v, sweep, chain, 0u}, P.key0, P.key1);
+  int rule = pick_rule(li, ri, rnd.x);
+  int slotP = rule >> 1;
+  int slotM = ((rule ^ (rule >> 1)) & 1) ^ 1;
+  int Pn = slotP ? r : l, On = slotP ? l : r;
+  uint32_t chp = ch[Pn - m];
+  int Mn = slotM ? (int)(chp >> 16) : (int)(chp & 0xFFFFu);
+  int Kn = slotM ? (int)(chp & 0xFFFFu) : (int)(chp >> 16);
+  uint32_t* pP = lab + (size_t)(Pn - m) * NW;
+  const uint32_t* pD = lab + (size_t)(v - m) * NW;
+  const uint32_t* pO = On >= m ? lab + (size_t)(On - m) * NW : leaf + (size_t)On * NW;
+  const uint32_t* pK = Kn >= m ? lab + (size_t)(Kn - m) * NW : leaf + (size_t)Kn * NW;
+  const uint32_t* pM = Mn >= m ? lab + (size_t)(Mn - m) * NW : leaf + (size_t)Mn * NW;
+  MoveCounts cnt = {};
+  const int NS = (W > 0 || sum == nullptr) ? 0 : P.nsum;
+  const uint32_t *sD = nullptr, *sO = nullptr, *sK = nullptr, *sM = nullptr;
+  const uint32_t pat = group_pattern(G) << t;
+  if (NS > 0) {
+    sD = sum + (size_t)(v - m) * NS;
+    sO = On >= m ? sum + (size_t)(On - m) * NS : leafsum + (size_t)On * NS;
+    sK = Kn >= m ? sum + (size_t)(Kn - m) * NS : leafsum + (size_t)Kn * NS;
+    sM = Mn >= m ? sum + (size_t)(Mn - m) * NS : leafsum + (size_t)Mn * NS;
+  }
+#define TSA_ACC(c)                                                                          \
+  {                                                                                         \
+    uint32_t nm = ~s.c, x = (k.c | o.c) & (mm.c | d.c);                                     \
+    acc_counts<MODE>(cnt, k.c & nm, mm.c & nm, p.c & nm, o.c & nm, d.c & nm, x & nm);       \
+  }
+  if constexpr (W > 0) {
+    for (int i = t; i < NW; i += G) {
+      uint32_t d = pD[i], p = pP[i], o = pO[i], k = pK[i], mm = pM[i];
+      uint32_t nm = Sm ? ~Sm[i] : 0xFFFFFFFFu, x = (k | o) & (mm | d);
+      acc_counts<MODE>(cnt, k & nm, mm & nm, p & nm, o & nm, d & nm, x & nm);
+    }
+  } else if (NS > 0) {
+    for (int q = 0; q < NS; q++) {
+      uint32_t u = (sK[q] | sM[q] | sO[q] | sD[q]) & pat;
+      while (u) {
+        int w = (q * 32 + __ffs(u) - 1) * 4;
+        u &= u - 1;
+        uint4 d = ld4(pD + w), p = ld4(pP + w), o = ld4(pO + w), k = ld4(pK + w), mm = ld4(pM + w);
+        uint4 s = Sm ? ld4(Sm + w) : make_uint4(0u, 0u, 0u, 0u);
+        TSA_ACC(x) TSA_ACC(y) TSA_ACC(z) TSA_ACC(w)
+      }
+    }
+  } else {
+    for (int w = 4 * t; w < NW; w += 4 * G) {
+      uint4 d = ld4(pD + w), p = ld4(pP + w), o = ld4(pO + w), k = ld4(pK + w), mm = ld4(pM + w);
+      uint4 s = Sm ? ld4(Sm + w) : make_uint4(0u, 0u, 0u, 0u);
+      TSA_ACC(x) TSA_ACC(y) TSA_ACC(z) TSA_ACC(w)
+    }
+  }
+#undef TSA_ACC
+  reduce_counts<MODE>(cnt, gm, G);
+  float dE = energy_from_counts<MODE>(cnt, P);
+  bool acc = metropolis(rnd.y, beta, dE);
+  if (t == 0) nprop++;
+  if (acc) {
+    // every lane writes its own words of X = (K|O)&(M|D) (the inputs were just read: cache hits)
+    if constexpr (W > 0) {
+      for (int i = t; i < NW; i += G) pP[i] = (pK[i] | pO[i]) & (pM[i] | pD[i]);
+    } else if (NS > 0) {
+      uint32_t* sP = sum + (size_t)(Pn - m) * NS;
+      for (int q = 0; q < NS; q++) {
+        uint32_t u = (sK[q] | sM[q] | sO[q] | sD[q]) & pat, xs = 0;
+        while (u) {
+          int b = __ffs(u) - 1, w = (q * 32 + b) * 4;
+          u &= u - 1;
+          uint4 d = ld4(pD + w), o = ld4(pO + w), k = ld4(pK + w), mm = ld4(pM + w);
+          uint4 x = make_uint4((k.x | o.x) & (mm.x | d.x), (k.y | o.y) & (mm.y | d.y), (k.z | o.z) & (mm.z | d.z),
+                               (k.w | o.w) & (mm.w | d.w));
+          *reinterpret_cast<uint4*>(pP + w) = x;
+          if (x.x | x.y | x.z | x.w) xs |= 1u << b;
+        }
+        for (int o = G >> 1; o > 0; o >>= 1) xs |= __shfl_xor_sync(gm, xs, o);
+        if (t == 0) sP[q] = xs;
+      }
+    } else {
+      for (int w = 4 * t; w < NW; w += 4 * G) {
+        uint4 d = ld4(pD + w), o = ld4(pO + w), k = ld4(pK + w), mm = ld4(pM + w);
+        *reinterpret_cast<uint4*>(pP + w) = make_uint4((k.x | o.x) & (mm.x | d.x), (k.y | o.y) & (mm.y | d.y),
+                                                       (k.z | o.z) & (mm.z | d.z), (k.w | o.w) & (mm.w | d.w));
+      }
+    }
+    uint32_t nchp = slotM ? ((chp & 0xFFFFu) | ((uint32_t)On << 16)) : ((chp & 0xFFFF0000u) | (uint32_t)On);
+    uint32_t nchv = slotP ? ((chv & 0xFFFF0000u) | (uint32_t)Mn) : ((chv & 0xFFFFu) | ((uint32_t)Mn << 16));
+    __syncwarp(gm);  // all lanes have read ch[Pn - m] / ch[v - m] before lane 0 rewrites them
+    if (t == 0) {
+      nacc++;
+      ch[Pn - m] = nchp;
+      ch[v - m] = nchv;
+    }
     chv = nchv;
   }
   return chv;
@@ -356,6 +508,7 @@ __device__ void slice_step(const Params& P, const uint32_t* lab, const uint32_t*
 // -------------------------------------------------------------------------------------
 template <int W, int MODE, bool SMEM>
 __global__ void __launch_bounds__(256) k_seq(Params P, uint32_t* __restrict__ rec, const uint32_t* __restrict__ leaf,
+                                             const uint32_t* __restrict__ leafsum,
                                              int nchains, float beta, uint32_t sweep0, int nsweeps,
                                              uint16_t* __restrict__ stk, unsigned long long* stats) {
   extern __shared__ uint4 smem4[];
@@ -385,11 +538,12 @@ __global__ void __launch_bounds__(256) k_seq(Params P, uint32_t* __restrict__ re
     uint32_t* lab = base;
     uint32_t* ch = base + (size_t)P.nint * NW;
     const uint32_t* Sm = P.slicing ? base + P.s_off : nullptr;
+    uint32_t* sumb = P.nsum ? base + P.sum_off : nullptr;
     const int m = P.m, root = 2 * m - 2;
     for (int s = 0; s < nsweeps; s++) {
       int v = root, sp = 0;
       while (true) {
-        uint32_t cw = visit<W, MODE>(lab, ch, lf, Sm, P, v, beta, sweep0 + s, (uint32_t)c, np, na);
+        uint32_t cw = visit<W, MODE>(lab, ch, lf, Sm, sumb, leafsum, P, v, beta, sweep0 + s, (uint32_t)c, np, na);
         int l = (int)(cw & 0xFFFFu), r = (int)(cw >> 16);
         bool li = l >= m, ri = r >= m;
         if (li) {
@@ -430,6 +584,7 @@ __global__ void __launch_bounds__(256) k_seq(Params P, uint32_t* __restrict__ re
 // -------------------------------------------------------------------------------------
 template <int W, int MODE, bool SMEM, int LPC>
 __global__ void __launch_bounds__(256) k_warp(Params P, uint32_t* __restrict__ rec, const uint32_t* __restrict__ leaf,
+                                              const uint32_t* __restrict__ leafsum,
                                               int nchains, float beta, uint32_t sweep0, int nsweeps,
                                               unsigned long long* stats) {
   static_assert(LPC == 32 || LPC == 16 || LPC == 8, "LPC");
@@ -469,21 +624,64 @@ __global__ void __launch_bounds__(256) k_warp(Params P, uint32_t* __restrict__ r
   uint32_t* ch = base + (size_t)P.nint * NW;
   uint32_t* S = base + P.s_off;
   const uint32_t* Sm = P.slicing ? S : nullptr;
+  uint32_t* sumb = P.nsum ? base + P.sum_off : nullptr;
   int np = 0, na = 0, nst = 0, nv = 0, nsp = 0, nsa = 0;  // proposals, accepts, steps, visits, slice props/accepts
+  long long nbusy = 0;                                     // lanes doing visit work, summed over steps
   const unsigned lt = (1u << gl) - 1u;
   const int shift = g * LPC;
   for (int s = 0; s < nsweeps; s++) {
     if (gl == 0) wl[0] = (uint16_t)root;
     int sp = 1;
     __syncwarp(gmask);
+    if constexpr (LPC == 32) {
+      if (P.coop_max > 1) {
+        // Adaptive lanes per node: with k < 32 ready nodes, each of them gets G = 32 / nextpow2(k) lanes
+        // (at most coop_max), which split its label words (visit_coop).  Path-like trees (k = 1 at
+        // almost every step) thus use the whole warp instead of one lane.
+        while (sp > 0) {
+          int k = min(32, sp);
+          int lgk = 32 - __clz(k - 1);                       // log2 nextpow2(k)
+          int G = min(max(32 >> lgk, P.coop_min), P.coop_max), lg = 31 - __clz(G);
+          int nn = min(k, 32 >> lg), b0 = sp - nn;
+          int j = lane >> lg, t = lane & (G - 1);
+          bool act = j < nn;
+          nst++;
+          nv += act && t == 0;
+          nbusy += act;
+          int v = act ? (int)wl[b0 + j] : 0;
+          __syncwarp();
+          uint32_t cw = 0;
+          if (act) {
+            if (G == 1) cw = visit<W, MODE>(lab, ch, lf, Sm, sumb, leafsum, P, v, beta, sweep0 + s, (uint32_t)c, np, na);
+            else {
+              unsigned gm = (G == 32) ? 0xFFFFFFFFu : (((1u << G) - 1u) << (j * G));
+              cw = visit_coop<W, MODE>(lab, ch, lf, Sm, sumb, leafsum, P, v, beta, sweep0 + s, (uint32_t)c, G, t, gm, np, na);
+            }
+          }
+          bool lead = act && t == 0;
+          bool c1 = lead && (int)(cw & 0xFFFFu) >= m;
+          bool c2 = lead && (int)(cw >> 16) >= m;
+          unsigned b1 = __ballot_sync(0xFFFFFFFFu, c1), b2 = __ballot_sync(0xFFFFFFFFu, c2);
+          int pos = b0 + __popc(b1 & lt) + __popc(b2 & lt);
+          if (c2) wl[pos++] = (uint16_t)(cw >> 16);
+          if (c1) wl[pos] = (uint16_t)(cw & 0xFFFFu);
+          sp = b0 + __popc(b1) + __popc(b2);
+          __syncwarp();
+        }
+        if (P.slice_moves > 0 && (sweep0 + s + 1) % (uint32_t)P.slice_every == 0)
+          slice_step<W, MODE>(P, lab, ch, S, lf, beta, sweep0 + s, (uint32_t)c, lane, nsp, nsa);
+        continue;
+      }
+    }
     while (sp > 0) {
       int k = min(LPC, sp), b0 = sp - k;
       nst++;
       nv += gl < k;
+      nbusy += gl < k;
       int v = gl < k ? (int)wl[b0 + gl] : 0;
       __syncwarp(gmask);
       uint32_t cw = 0;
-      if (gl < k) cw = visit<W, MODE>(lab, ch, lf, Sm, P, v, beta, sweep0 + s, (uint32_t)c, np, na);
+      if (gl < k) cw = visit<W, MODE>(lab, ch, lf, Sm, sumb, leafsum, P, v, beta, sweep0 + s, (uint32_t)c, np, na);
       bool c1 = gl < k && (int)(cw & 0xFFFFu) >= m;
       bool c2 = gl < k && (int)(cw >> 16) >= m;
       unsigned b1 = __ballot_sync(gmask, c1) >> shift, b2 = __ballot_sync(gmask, c2) >> shift;
@@ -510,6 +708,7 @@ __global__ void __launch_bounds__(256) k_warp(Params P, uint32_t* __restrict__ r
     np += __shfl_xor_sync(gmask, np, o);
     na += __shfl_xor_sync(gmask, na, o);
     nv += __shfl_xor_sync(gmask, nv, o);
+    nbusy += __shfl_xor_sync(gmask, nbusy, o);
   }
   if (gl == 0) {
     atomicAdd(&stats[0], (unsigned long long)np);
@@ -518,6 +717,103 @@ __global__ void __launch_bounds__(256) k_warp(Params P, uint32_t* __restrict__ r
     atomicAdd(&stats[3], (unsigned long long)nv);
     atomicAdd(&stats[4], (unsigned long long)nsp);
     atomicAdd(&stats[5], (unsigned long long)nsa);
+    atomicAdd(&stats[6], (unsigned long long)nbusy);
+  }
+}
+
+// -------------------------------------------------------------------------------------
+// Kernel "block": one thread block (wpc = blockDim/32 warps) per chain, so that few long chains can use
+// the whole GPU.  The ready nodes (parent already processed in this sweep) are in a shared work list; each
+// step the warps take up to per = ceil(k / wpc) of the k ready nodes each, with G lanes per node as in the
+// warp kernel (G = 32 / nextpow2(per), within [coop_min, coop_max]), and the children are pushed back
+// after a block-wide prefix sum of the per-warp child counts.  Same RNG keying as all kernels: the
+// result is bit-identical.  Slice moves (if any) run on warp 0 after the sweep.
+// -------------------------------------------------------------------------------------
+template <int W, int MODE>
+__global__ void __launch_bounds__(512) k_block(Params P, uint32_t* __restrict__ rec, const uint32_t* __restrict__ leaf,
+                                               const uint32_t* __restrict__ leafsum, int nchains, float beta,
+                                               uint32_t sweep0, int nsweeps, unsigned long long* stats) {
+  extern __shared__ uint4 smem4[];
+  uint16_t* wl = reinterpret_cast<uint16_t*>(smem4);
+  __shared__ int wcnt[16];
+  const int NWARP = blockDim.x >> 5, lane = threadIdx.x & 31, wid = threadIdx.x >> 5;
+  const int c = blockIdx.x;
+  if (c >= nchains) return;  // whole block
+  const int NW = (W > 0) ? W : P.nw;
+  const int m = P.m, root = 2 * m - 2;
+  uint32_t* base = rec + (size_t)c * P.chain_words;
+  uint32_t* lab = base;
+  uint32_t* ch = base + (size_t)P.nint * NW;
+  uint32_t* S = base + P.s_off;
+  const uint32_t* Sm = P.slicing ? S : nullptr;
+  uint32_t* sumb = P.nsum ? base + P.sum_off : nullptr;
+  int np = 0, na = 0, nst = 0, nv = 0, nsp = 0, nsa = 0;
+  long long nbusy = 0;
+  const unsigned lt = (1u << lane) - 1u;
+  for (int s = 0; s < nsweeps; s++) {
+    if (threadIdx.x == 0) wl[0] = (uint16_t)root;
+    int sp = 1;
+    __syncthreads();
+    while (sp > 0) {
+      int per = min(32, (sp + NWARP - 1) / NWARP);
+      int lgk = 32 - __clz(per - 1);
+      int G = min(max(32 >> lgk, P.coop_min), P.coop_max), lg = 31 - __clz(G);
+      per = min(per, 32 >> lg);
+      int taken = min(sp, per * NWARP), b0 = sp - taken;
+      int kw = min(per, max(0, taken - wid * per));      // nodes of this warp
+      int j = lane >> lg, t = lane & (G - 1);
+      bool act = j < kw;
+      if (threadIdx.x == 0) nst++;
+      nv += act && t == 0;
+      nbusy += act;
+      int v = act ? (int)wl[b0 + wid * per + j] : 0;
+      uint32_t cw = 0;
+      if (act) {
+        if (G == 1) cw = visit<W, MODE>(lab, ch, leaf, Sm, sumb, leafsum, P, v, beta, sweep0 + s, (uint32_t)c, np, na);
+        else {
+          unsigned gm = (G == 32) ? 0xFFFFFFFFu : (((1u << G) - 1u) << (j * G));
+          cw = visit_coop<W, MODE>(lab, ch, leaf, Sm, sumb, leafsum, P, v, beta, sweep0 + s, (uint32_t)c, G, t, gm, np, na);
+        }
+      }
+      bool lead = act && t == 0;
+      bool c1 = lead && (int)(cw & 0xFFFFu) >= m;
+      bool c2 = lead && (int)(cw >> 16) >= m;
+      unsigned b1 = __ballot_sync(0xFFFFFFFFu, c1), b2 = __ballot_sync(0xFFFFFFFFu, c2);
+      if (lane == 0) wcnt[wid] = __popc(b1) + __popc(b2);
+      __syncthreads();  // all nodes of this step read from wl and visited; per-warp child counts ready
+      int off = 0, tot = 0;
+      for (int w = 0; w < NWARP; w++) {
+        int x = wcnt[w];
+        off += w < wid ? x : 0;
+        tot += x;
+      }
+      int pos = b0 + off + __popc(b1 & lt) + __popc(b2 & lt);
+      if (c2) wl[pos++] = (uint16_t)(cw >> 16);
+      if (c1) wl[pos] = (uint16_t)(cw & 0xFFFFu);
+      sp = b0 + tot;
+      __syncthreads();  // pushes visible; wcnt free for the next step
+    }
+    if (P.slice_moves > 0 && (sweep0 + s + 1) % (uint32_t)P.slice_every == 0) {
+      if (wid == 0) slice_step<W, MODE>(P, lab, ch, S, leaf, beta, sweep0 + s, (uint32_t)c, lane, nsp, nsa);
+      __syncthreads();
+    }
+  }
+  for (int o = 16; o > 0; o >>= 1) {
+    np += __shfl_xor_sync(0xFFFFFFFFu, np, o);
+    na += __shfl_xor_sync(0xFFFFFFFFu, na, o);
+    nv += __shfl_xor_sync(0xFFFFFFFFu, nv, o);
+    nbusy += __shfl_xor_sync(0xFFFFFFFFu, nbusy, o);
+  }
+  if (lane == 0) {
+    atomicAdd(&stats[0], (unsigned long long)np);
+    atomicAdd(&stats[1], (unsigned long long)na);
+    if (wid == 0) {
+      atomicAdd(&stats[2], (unsigned long long)nst);
+      atomicAdd(&stats[4], (unsigned long long)nsp);
+      atomicAdd(&stats[5], (unsigned long long)nsa);
+    }
+    atomicAdd(&stats[3], (unsigned long long)nv);
+    atomicAdd(&stats[6], (unsigned long long)nbusy);
   }
 }
 
@@ -797,8 +1093,10 @@ struct Opts {
   std::string init_slices;  // comma-separated label ids sliced initially in every chain
   int niters2 = -1;
   int nchains = 1024, niters = 50, block = 0, wpb = 0, lpc = 32, eval_every = 1, ref_chains = 8, mode = 0;
-  bool check = false, quiet = false, cross = true, wide = false, slicing = false;
+  bool check = false, quiet = false, cross = true, wide = false, slicing = false, no_sum = false, force_sum = false;
   int slice_moves = 1, slice_every = 1, max_slices = 0, random_slices = 0;
+  int coop_max = 0, coop_min_units = -1, coop_min = 1, wpc = 0;  // lanes per node visit (warp kernel): 0 auto (32 wide, off for W > 0), 1 off;
+                                                       // min units per lane (-1 auto); lanes per node even when >= 32 are ready
   double sc_target = 20.0, sc_weight = 1.0, trunc_frac = 0.25;
   uint64_t seed = 1;
   double gm[6] = {11.9e15, 1.6e13, 6, 6, 8, 4e-6};  // peak ops/s, bw bits/s, m0, n0, k0, launch s
@@ -847,7 +1145,7 @@ static void usage() {
           "  [--stage2-betas SPEC [--stage2-niters K] [--stage2-mode gpu|h100]]  (continue the population)\n"
           "  [--sc-target x] [--sc-weight y] [--scheme indep|pa|trunc] [--trunc-frac f]\n"
           "  [--slicing [--slice-moves k] [--slice-every s] [--max-slices n] [--init-slices l1,l2,..]]\n"
-          "  [--kernel auto|seq|seqsm|warp|warpsm] [--lpc 32|16|8] [--wide] [--block B] [--wpb W] [--seed s]\n"
+          "  [--kernel auto|seq|seqsm|warp|warpsm|block [--wpc n]] [--lpc 32|16|8] [--coop-max G] [--coop-min G0] [--coop-min-units u] [--wide] [--sums|--no-sum] [--block B] [--wpb W] [--seed s]\n"
           "  [--eval-every k] [--out result.json] [--check [--ref-chains R] [--random-slices k]] [--quiet]\n");
   exit(1);
 }
@@ -891,7 +1189,13 @@ static Opts parse(int argc, char** argv) {
     else if (a == "--max-slices") o.max_slices = std::stoi(nx());
     else if (a == "--init-slices") { o.init_slices = nx(); o.slicing = true; }
     else if (a == "--random-slices") { o.random_slices = std::stoi(nx()); o.slicing = true; }
+    else if (a == "--coop-max") o.coop_max = std::stoi(nx());
+    else if (a == "--coop-min-units") o.coop_min_units = std::stoi(nx());
+    else if (a == "--coop-min") o.coop_min = std::stoi(nx());
+    else if (a == "--wpc") o.wpc = std::stoi(nx());
     else if (a == "--wide") o.wide = true;
+    else if (a == "--no-sum") o.no_sum = true;
+    else if (a == "--sums") o.force_sum = true;
     else if (a == "--check") o.check = true;
     else if (a == "--no-cross") o.cross = false;
     else if (a == "--quiet") o.quiet = true;
@@ -919,15 +1223,16 @@ struct Runner {
   const Opts& O;
   Params P;
   int NW;
-  std::vector<uint32_t> h_leaf;
+  std::vector<uint32_t> h_leaf, h_leafsum;
   int nchains;
-  uint32_t *d_rec = nullptr, *d_rec2 = nullptr, *d_leaf = nullptr;
+  uint32_t *d_rec = nullptr, *d_rec2 = nullptr, *d_leaf = nullptr, *d_leafsum = nullptr;
   uint16_t* d_stk = nullptr;
   unsigned long long* d_stats = nullptr;
   float* d_lcost = nullptr;
   int *d_sc = nullptr, *d_ns = nullptr;
   int* d_anc = nullptr;
   std::string kernel;
+  int wpc = 1;           // warps per chain (kernel "block")
   int mode;              // current energy mode (0 tc, 1 gpu, 2 h100); may switch for stage 2
   double kernel_ms = 0;  // accumulated sweep-kernel time
 
@@ -940,7 +1245,11 @@ struct Runner {
     P.nint = I.m - 1;
     P.nw = NW;
     P.s_off = round4(P.nint * NW + P.nint);
-    P.chain_words = P.s_off + round4(NW);
+    // chunk summaries pay off from ~32 chunks per label set (measured on the RTX 6000: sq48/sq64 +10..50 %, narrower
+    // networks -3..-17 %); --sums forces them on, --no-sum off
+    P.nsum = (W == 0 && !O.no_sum && (O.force_sum || NW >= 128)) ? (NW / 4 + 31) / 32 : 0;
+    P.sum_off = P.s_off + round4(NW);
+    P.chain_words = P.sum_off + round4(P.nint * P.nsum);
     P.leaf_sc = 0;
     for (auto& ix : I.ixs) P.leaf_sc = std::max(P.leaf_sc, (int)ix.size());
     P.slicing = O.slicing ? 1 : 0;
@@ -970,6 +1279,8 @@ struct Runner {
     h_leaf.assign((size_t)I.m * NW, 0);
     for (int i = 0; i < I.m; i++)
       for (int l : I.ixs[i]) h_leaf[(size_t)i * NW + (l >> 5)] |= 1u << (l & 31);
+    h_leafsum.assign((size_t)I.m * std::max(1, P.nsum), 0);
+    if (P.nsum) fill_sums(h_leaf.data(), I.m, h_leafsum.data());
     if (kernel == "auto") {
       // Measured on the RTX 6000 (bench/results/throughput_rtx6000.txt): staging chains in shared
       // memory (warpsm) wins when a full block of 8 chains fits, or when the population no longer
@@ -981,6 +1292,35 @@ struct Runner {
       size_t leafb = (size_t)round4(P.m * NW) * 4;
       size_t fit = leafb < (size_t)g_smem_optin ? ((size_t)g_smem_optin - leafb) / per_warp : 0;
       kernel = (fit >= 8 || (foot > (size_t)l2 && fit >= 4)) ? "warpsm" : "warp";
+      // chains in global memory and too few of them to fill the GPU with one warp each: one block of several warps
+      // per chain (k_block; 72 chains on the RTX 6000, 8 per chain: 0.96-2.0x the warp kernel, both with cooperative visits)
+      int nsm = 0;
+      CK(cudaDeviceGetAttribute(&nsm, cudaDevAttrMultiProcessorCount, 0));
+      if (kernel == "warp" && O.lpc == 32 && 2 * nchains <= nsm * 16) kernel = "block";
+    }
+    {
+      // lanes sharing one node visit (warp kernels, one chain per warp): a power of 2, at most 32 and at most
+      // (load units per label set) / coop_min_units, a unit being a 32-bit word (W > 0) or a 16-byte chunk (wide).
+      // Off by default for W > 0 (<= 512 labels): a visit there is one memory round trip either way, and the
+      // count reduction made it 1.3-2x slower (RTX 6000, 72 chains: sat500, and sq16 from the sweep).
+      auto p2floor = [](int x) { int p = 1; while (2 * p <= x) p *= 2; return p; };
+      int units = W > 0 ? W : NW / 4;
+      int mu = O.coop_min_units > 0 ? O.coop_min_units : (W > 0 ? 2 : 1);
+      int cap = std::min(O.coop_max > 0 ? O.coop_max : (W > 0 ? 1 : 32), std::max(1, units / mu));
+      bool warpk = kernel == "warp" || kernel == "warpsm" || kernel == "block";
+      P.coop_max = (warpk && O.lpc == 32) ? std::min(32, p2floor(std::max(1, cap))) : 1;
+      P.coop_min = std::min(P.coop_max, p2floor(std::max(1, O.coop_min)));
+    }
+    if (kernel == "block") {
+      // warps per chain: --wpc (at most 16), or ~16 warps per SM and at most 8 per chain.  Measured on the RTX 6000
+      // (72 SMs; 8 networks of 1000-8000 tensors): with 72 and 144 chains 8 per chain is best or within 9 %
+      // (16 per chain: 5-25 % slower); with 288 / 576 chains 4 / 2 per chain is best or within 5 % on 3 of 4
+      // networks (grid45, 1.5 MB per chain, prefers 8)
+      int nsm = 0;
+      CK(cudaDeviceGetAttribute(&nsm, cudaDevAttrMultiProcessorCount, 0));
+      int want = O.wpc > 0 ? O.wpc : std::min(8, std::max(1, nsm * 16 / std::max(1, nchains)));
+      wpc = 1;
+      while (2 * wpc <= std::min(want, 16)) wpc *= 2;
     }
     if (P.slice_moves > 0 && (kernel == "seq" || kernel == "seqsm" || O.lpc != 32)) {
       fprintf(stderr, "slice moves need the warp kernels with --lpc 32\n");
@@ -989,6 +1329,17 @@ struct Runner {
   }
 
   size_t chain_bytes() const { return (size_t)P.chain_words * 4; }
+  // chunk summaries of n label sets of NW words: bit c of word c/32 iff chunk c (words 4c..4c+3) is nonzero
+  void fill_sums(const uint32_t* lab, int n, uint32_t* out) const {
+    for (int i = 0; i < n; i++) {
+      uint32_t* o = out + (size_t)i * P.nsum;
+      std::fill(o, o + P.nsum, 0u);
+      for (int c = 0; c < NW / 4; c++) {
+        const uint32_t* a = lab + (size_t)i * NW + 4 * c;
+        if (a[0] | a[1] | a[2] | a[3]) o[c >> 5] |= 1u << (c & 31);
+      }
+    }
+  }
   const uint32_t* chS(const uint32_t* base) const { return P.slicing ? base + P.s_off : nullptr; }
 
   void alloc() {
@@ -996,16 +1347,18 @@ struct Runner {
     if (O.scheme != "indep") CK(cudaMalloc(&d_rec2, chain_bytes() * nchains));
     CK(cudaMalloc(&d_leaf, h_leaf.size() * 4));
     CK(cudaMemcpy(d_leaf, h_leaf.data(), h_leaf.size() * 4, cudaMemcpyHostToDevice));
+    CK(cudaMalloc(&d_leafsum, h_leafsum.size() * 4));
+    CK(cudaMemcpy(d_leafsum, h_leafsum.data(), h_leafsum.size() * 4, cudaMemcpyHostToDevice));
     if (kernel == "seq" || kernel == "seqsm" || O.check) CK(cudaMalloc(&d_stk, (size_t)P.nint * nchains * sizeof(uint16_t)));
-    CK(cudaMalloc(&d_stats, 6 * sizeof(unsigned long long)));
-    CK(cudaMemset(d_stats, 0, 6 * sizeof(unsigned long long)));
+    CK(cudaMalloc(&d_stats, 7 * sizeof(unsigned long long)));
+    CK(cudaMemset(d_stats, 0, 7 * sizeof(unsigned long long)));
     CK(cudaMalloc(&d_lcost, nchains * sizeof(float)));
     CK(cudaMalloc(&d_sc, nchains * sizeof(int)));
     CK(cudaMalloc(&d_ns, nchains * sizeof(int)));
     CK(cudaMalloc(&d_anc, nchains * sizeof(int)));
   }
   void release() {
-    cudaFree(d_rec); if (d_rec2) cudaFree(d_rec2); cudaFree(d_leaf); if (d_stk) cudaFree(d_stk); cudaFree(d_stats);
+    cudaFree(d_rec); if (d_rec2) cudaFree(d_rec2); cudaFree(d_leaf); cudaFree(d_leafsum); if (d_stk) cudaFree(d_stk); cudaFree(d_stats);
     cudaFree(d_lcost); cudaFree(d_sc); cudaFree(d_ns); cudaFree(d_anc);
   }
 
@@ -1035,6 +1388,7 @@ struct Runner {
       std::vector<uint32_t> ch = O.tree.empty() ? random_tree(I.m, splitmix64(O.seed * 1000003ULL + c)) : tree0;
       std::copy(ch.begin(), ch.end(), base + (size_t)P.nint * NW);
       if (!labels_from_topology(I, NW, ch.data(), base)) ok = false;
+      else if (P.nsum) fill_sums(base, P.nint, base + P.sum_off);
     }
     if (!ok) { fprintf(stderr, "invalid initial tree\n"); exit(1); }
     if (!O.tree.empty())
@@ -1077,8 +1431,8 @@ struct Runner {
       attr = true;
     }
     int grid = (nchains + wpb * CPW - 1) / (wpb * CPW);
-    if (sm) k_warp<W, MODE, true, LPC><<<grid, 32 * wpb, smem>>>(P, rec, d_leaf, nchains, beta, sweep0, nsweeps, d_stats);
-    else k_warp<W, MODE, false, LPC><<<grid, 32 * wpb, smem>>>(P, rec, d_leaf, nchains, beta, sweep0, nsweeps, d_stats);
+    if (sm) k_warp<W, MODE, true, LPC><<<grid, 32 * wpb, smem>>>(P, rec, d_leaf, d_leafsum, nchains, beta, sweep0, nsweeps, d_stats);
+    else k_warp<W, MODE, false, LPC><<<grid, 32 * wpb, smem>>>(P, rec, d_leaf, d_leafsum, nchains, beta, sweep0, nsweeps, d_stats);
   }
 
   // Launch nsweeps sweeps of every chain at inverse temperature beta.
@@ -1090,14 +1444,26 @@ struct Runner {
       if (kernel == "seqsm" && O.block <= 0)  // as many chains per block as fit in shared memory (<= 32)
         B = (int)std::max<size_t>(1, std::min<size_t>(32, (g_smem_optin - leafb) / chain_bytes()));
       if (kernel == "seq") {
-        k_seq<W, MODE, false><<<(nchains + B - 1) / B, B>>>(P, rec, d_leaf, nchains, beta, sweep0, nsweeps, d_stk, d_stats);
+        k_seq<W, MODE, false><<<(nchains + B - 1) / B, B>>>(P, rec, d_leaf, d_leafsum, nchains, beta, sweep0, nsweeps, d_stk, d_stats);
       } else {
         size_t smem = leafb + (size_t)B * chain_bytes();
         static bool attr = false;
         if (!attr) { CK(cudaFuncSetAttribute(k_seq<W, MODE, true>, cudaFuncAttributeMaxDynamicSharedMemorySize, g_smem_optin)); attr = true; }
         if (smem > (size_t)g_smem_optin) { fprintf(stderr, "seqsm: %zu bytes smem needed for %d chains/block; lower --block\n", smem, B); exit(1); }
-        k_seq<W, MODE, true><<<(nchains + B - 1) / B, B, smem>>>(P, rec, d_leaf, nchains, beta, sweep0, nsweeps, d_stk, d_stats);
+        k_seq<W, MODE, true><<<(nchains + B - 1) / B, B, smem>>>(P, rec, d_leaf, d_leafsum, nchains, beta, sweep0, nsweeps, d_stk, d_stats);
       }
+    } else if (kernel == "block") {
+      // one block of wpc warps per chain; the work list (uint16 per internal node) in shared memory
+      size_t smem = (size_t)round4((P.nint + 1) / 2) * 4;
+      static int dyn_max = -1;
+      if (dyn_max < 0) {  // the opt-in limit covers static (per-warp counts) + dynamic shared memory
+        cudaFuncAttributes fa;
+        CK(cudaFuncGetAttributes(&fa, k_block<W, MODE>));
+        dyn_max = g_smem_optin - (int)fa.sharedSizeBytes;
+        CK(cudaFuncSetAttribute(k_block<W, MODE>, cudaFuncAttributeMaxDynamicSharedMemorySize, dyn_max));
+      }
+      if (smem > (size_t)dyn_max) { fprintf(stderr, "block: work list does not fit in shared memory\n"); exit(1); }
+      k_block<W, MODE><<<nchains, 32 * wpc, smem>>>(P, rec, d_leaf, d_leafsum, nchains, beta, sweep0, nsweeps, d_stats);
     } else {
       bool sm = kernel == "warpsm";
       if constexpr (W == 0) {  // wide path: one warp per chain only
@@ -1275,7 +1641,7 @@ struct Runner {
     }
     CK(cudaDeviceSynchronize());
     double t_anneal = now_s() - t0;
-    unsigned long long stats[6];
+    unsigned long long stats[7];
     CK(cudaMemcpy(stats, d_stats, sizeof stats, cudaMemcpyDeviceToHost));
 
     // Final best tree: verify on host from scratch; with slicing, repair sc > sc_target greedily.
@@ -1290,7 +1656,7 @@ struct Runner {
       fprintf(stderr, "done: best tc %.4f sc %d |S| %d (repair +%d) time %.4e s time2 %.4e s (per slice) | anneal %.2fs init %.2fs "
               "kernel %.2fs | %.3e proposals/s | lane occupancy %.3f | slice moves %llu/%llu accepted\n",
               HE.tc, HE.sc, HE.ns, n_repair, HE.time, HE.time2, t_anneal, t_init, kernel_ms / 1e3,
-              stats[0] / (kernel_ms / 1e3), stats[2] ? stats[3] / ((double)O.lpc * stats[2]) : 0.0, stats[5], stats[4]);
+              stats[0] / (kernel_ms / 1e3), stats[2] ? stats[6] / ((double)O.lpc * stats[2]) : 0.0, stats[5], stats[4]);
     FILE* f = O.out.empty() ? stdout : fopen(O.out.c_str(), "w");
     fprintf(f, "{\"tc\": %.6f, \"sc\": %d, \"gpu_time\": %s, \"h100_time\": %s, \"valid\": %s, \"labels_ok\": %s, \"best_chain\": %d,\n",
             HE.tc, HE.sc, jnum(HE.time).c_str(), jnum(HE.time2).c_str(), valid ? "true" : "false", labels_ok ? "true" : "false", best_chain);
@@ -1303,8 +1669,8 @@ struct Runner {
       for (int l = 0; l < I.nlab; l++)
         if (O.slicing && (S[l >> 5] >> (l & 31) & 1u)) fprintf(f, "%s%d", k++ ? "," : "", l);
     }
-    fprintf(f, "],\n \"t_anneal\": %.6f, \"t_init\": %.6f, \"kernel_s\": %.6f, \"proposals\": %llu, \"accepts\": %llu, \"warp_steps\": %llu, \"node_visits\": %llu, \"slice_proposals\": %llu, \"slice_accepts\": %llu,\n",
-            t_anneal, t_init, kernel_ms / 1e3, stats[0], stats[1], stats[2], stats[3], stats[4], stats[5]);
+    fprintf(f, "],\n \"t_anneal\": %.6f, \"t_init\": %.6f, \"kernel_s\": %.6f, \"proposals\": %llu, \"accepts\": %llu, \"warp_steps\": %llu, \"node_visits\": %llu, \"slice_proposals\": %llu, \"slice_accepts\": %llu, \"busy_lanes\": %llu, \"coop_max\": %d, \"coop_min\": %d, \"nsum\": %d, \"wpc\": %d,\n",
+            t_anneal, t_init, kernel_ms / 1e3, stats[0], stats[1], stats[2], stats[3], stats[4], stats[5], stats[6], P.coop_max, P.coop_min, P.nsum, wpc);
     fprintf(f, " \"nchains\": %d, \"niters\": %d, \"nlevels\": %zu, \"total_sweeps\": %u, \"W\": %d, \"nw\": %d, \"lpc\": %d, \"kernel\": \"%s\", \"scheme\": \"%s\", \"mode\": %d, \"nresample\": %d,\n",
             nchains, O.niters, betas.size(), sweep_ctr, W, NW, O.lpc, kernel.c_str(), O.scheme.c_str(), O.mode, nresample);
     if (staged)
@@ -1344,25 +1710,31 @@ struct Runner {
     CK(cudaDeviceSynchronize());
     std::vector<uint32_t> fin((size_t)P.chain_words * nchains);
     CK(cudaMemcpy(fin.data(), d_rec, fin.size() * 4, cudaMemcpyDeviceToHost));
-    unsigned long long stats[6];
+    unsigned long long stats[7];
     CK(cudaMemcpy(stats, d_stats, sizeof stats, cudaMemcpyDeviceToHost));
     printf("check: %d chains, %zu levels x %d sweeps, kernel %s, mode %d, W=%d (nw %d), slicing %d (moves %d): "
            "%llu proposals, %llu accepted, %llu/%llu slice moves accepted\n",
            nchains, betas.size(), O.niters, kernel.c_str(), O.mode, W, NW, P.slicing, P.slice_moves, stats[0], stats[1],
            stats[5], stats[4]);
     // (1) labels
-    int bad_tree = 0, bad_lab = 0, changed = 0, Schanged = 0;
+    int bad_tree = 0, bad_lab = 0, bad_sum = 0, changed = 0, Schanged = 0;
     std::vector<uint32_t> lab2((size_t)P.nint * NW);
     for (int c = 0; c < nchains; c++) {
       const uint32_t* base = &fin[(size_t)c * P.chain_words];
       const uint32_t* b0 = &init[(size_t)c * P.chain_words];
       if (!labels_from_topology(I, NW, base + (size_t)P.nint * NW, lab2.data())) { bad_tree++; continue; }
       if (!std::equal(lab2.begin(), lab2.end(), base)) bad_lab++;
+      if (P.nsum) {
+        std::vector<uint32_t> s2((size_t)P.nint * P.nsum);
+        fill_sums(base, P.nint, s2.data());
+        if (!std::equal(s2.begin(), s2.end(), base + P.sum_off)) bad_sum++;
+      }
       if (!std::equal(base, base + P.s_off, b0)) changed++;
       if (!std::equal(base + P.s_off, base + P.s_off + NW, b0 + P.s_off)) Schanged++;
     }
-    printf("  [1] invalid trees: %d, chains with label mismatch vs recomputation: %d (chains changed by SA: %d/%d, slice set changed: %d)\n",
-           bad_tree, bad_lab, changed, nchains, Schanged);
+    printf("  [1] invalid trees: %d, chains with label mismatch vs recomputation: %d, chunk-summary mismatch: %d "
+           "(chains changed by SA: %d/%d, slice set changed: %d, summary words per node: %d)\n",
+           bad_tree, bad_lab, bad_sum, changed, nchains, Schanged, P.nsum);
     // (2) energies (per slice, on the sliced network)
     std::vector<float> lc;
     std::vector<int> sc, ns;
@@ -1441,7 +1813,7 @@ struct Runner {
     if (R > 0)
       printf("  [4] CPU Julia-port reference: %d/%d chains differ from GPU (ref did %lld proposals, %lld accepts, %.2fs => %.3g proposals/s single core)\n",
              refdiff, R, rp, ra, tref, rp / tref);
-    bool ok = bad_tree == 0 && bad_lab == 0 && scbad == 0 && maxd < 1e-3 && xdiff <= 0 && refdiff == 0;
+    bool ok = bad_tree == 0 && bad_lab == 0 && bad_sum == 0 && scbad == 0 && maxd < 1e-3 && xdiff <= 0 && refdiff == 0;
     printf("CHECK %s\n", ok ? "PASSED" : "FAILED");
     release();
     return ok ? 0 : 3;

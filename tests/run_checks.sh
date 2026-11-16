@@ -54,4 +54,38 @@ for inst in sat100 grid24 grid28; do
     done
   done
 done
+# E: lanes sharing one node visit (warp kernels, adaptive G = 32/nextpow2(ready nodes)).  Small instances with one
+# word per lane (--coop-min-units 1; forced on with --coop-max 32 up to 512 labels, where it is off by default), and
+# a 46x46 lattice (4140 labels, wide path) from the row-major sweep, a caterpillar tree with one ready node per
+# step, so G = 32
+for inst in sat100 reg3_250 grid24; do
+  for mode in tc h100; do
+    run "E coop $inst warp $mode" -i tests/data/$inst.txt --tree tests/data/$inst.tree --mode $mode --kernel warp --coop-min-units 1 --coop-max 32
+  done
+done
+for kernel in warp warpsm; do
+  for mode in tc gpu h100; do
+    run "E coop sq46 sweep $kernel $mode" -i tests/data/sq46.txt --tree tests/data/sq46.tree --mode $mode --kernel $kernel
+  done
+done
+run "E coop sq46 sweep slices" -i tests/data/sq46.txt --tree tests/data/sq46.tree --mode tc --kernel warp --random-slices 8
+run "E coop sq46 sweep sums off" -i tests/data/sq46.txt --tree tests/data/sq46.tree --mode tc --kernel warp --no-sum
+run "E coop grid45 sums forced" -i tests/data/grid45.txt --tree tests/data/grid45.tree --mode h100 --kernel warp --sums
+run "E coop sq46 sweep slicemoves" -i tests/data/sq46.txt --tree tests/data/sq46.tree --mode h100 --kernel warp --slicing --sc-target 20
+# F: one thread block per chain (--kernel block, wpc warps sharing a work list), against the sequential kernel
+# and the CPU reference
+for inst in sat100 reg3_250 lat14 grid24 grid45; do
+  for wpc in 2 4 16; do
+    for mode in tc h100; do
+      run "F block $inst wpc$wpc $mode" -i tests/data/$inst.txt --tree tests/data/$inst.tree --mode $mode --kernel block --wpc $wpc
+    done
+  done
+done
+for mode in tc gpu h100; do
+  run "F block sq46 sweep wpc8 $mode" -i tests/data/sq46.txt --tree tests/data/sq46.tree --mode $mode --kernel block --wpc 8
+done
+run "F block sat100 random init wpc4" -i tests/data/sat100.txt --mode tc --kernel block --wpc 4
+run "F block reg3_250 coop forced wpc4" -i tests/data/reg3_250.txt --tree tests/data/reg3_250.tree --mode h100 --kernel block --wpc 4 --coop-max 32 --coop-min-units 1
+run "F block grid24 slices wpc4" -i tests/data/grid24.txt --tree tests/data/grid24.tree --mode h100 --kernel block --wpc 4 --random-slices 8
+run "F block grid28 slicemoves wpc4" -i tests/data/grid28.txt --tree tests/data/grid28.tree --mode h100 --kernel block --wpc 4 --slicing --sc-target 20
 [ $fail = 0 ] && echo "ALL CHECKS PASSED" || echo "SOME CHECKS FAILED"

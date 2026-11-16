@@ -16,14 +16,14 @@ Compared with omeco's TreeSA (Rust, multithreaded). Tables and raw data: [`docs/
 | Against omeco's heavy setting (32 trials × 200 sweeps, 10–25 s) | better trees in **1.1–2.5 s** |
 | Contraction time on an H100 ([booltn](https://github.com/xuanzhaogao/booltn)), GPU-time energy `tc+h100` | trees contract **4–64× faster** than omeco trees (grid 3-SAT L = 22: 1.24 s → 19 ms) |
 | Slicing inside the annealer | modeled total time **1.5–341× lower** than omeco TreeSA + `slice_code` (geometric mean 7.2×); random 3-SAT n = 70 measured **41.7 s** vs about 13 min projected for the omeco tree |
-| Large networks (1000–8000 tensors, RTX 6000 or H200 vs omeco on 10 threads) | **about even** (the H200 is only 1.0–1.3× faster than the RTX 6000 on long chains): same quality-vs-time curve; refining a good initial tree is where it helps (64×64 lattice: tc 78.7 in 89 s vs 89–93 for TreeSA from greedy) |
+| Large networks (1000–8000 tensors, RTX 6000 vs omeco on 12 threads) | new kernels (cooperative visits, chunk summaries, a block of warps per chain) run the same trees **1.1–9.2× faster** (64×64 lattice, 72 chains: 801 s → 87 s); at matched time the GPU is now ahead on 6 of 8 networks by 0.8–15 log2 units (grid45 only at short times); omeco is ahead on grid32 at longer times and on the 48×48 lattice from greedy. Refining a good initial tree helps most (64×64 lattice: tc 78.7 in 17 s vs 91–93 for omeco TreeSA from greedy) |
 | Scale | any number of labels (tested to 8064, 64×64 lattice), up to 32767 tensors |
 
 Where it does not win:
 * Easy instances, because each call costs about 0.3 s of process start.
 * Large networks (thousands of labels): label sets are dense bitsets over all labels, so each visit costs
-  O(#labels); one GPU chain runs at 0.06–0.9 of a CPU core, and big instances need long chains. See the
-  report's "Large networks" section.
+  O(#labels); one GPU chain runs at about 0.6–1.2 of a CPU core, and big instances need long chains, so the
+  wins there are small. See the report's "Large networks" section.
 * Grid slicing runs, which take as long as omeco on 96 cores; the GPU wins on contraction time, not on
   optimizer wall time.
 * `mode="h100"` on its own, which gets stuck; use `"tc+h100"`.

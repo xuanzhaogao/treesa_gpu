@@ -264,4 +264,57 @@ D slicemoves grid28 warp tc: CHECK PASSED | 1320/1920 slice moves accepted label
 D slicemoves grid28 warp h100: CHECK PASSED | 1324/1920 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 5.61e-06 
 D slicemoves grid28 warpsm tc: SKIP (chains do not fit in shared memory on this GPU)
 D slicemoves grid28 warpsm h100: SKIP (chains do not fit in shared memory on this GPU)
+E coop sat100 warp tc: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 7.76e-06 chains differing: 0/48 0/4 chains differ 
+E coop sat100 warp h100: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 6.88e-06 chains differing: 0/48 0/4 chains differ 
+E coop reg3_250 warp tc: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 1.1e-05 chains differing: 0/48 0/4 chains differ 
+E coop reg3_250 warp h100: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 1.52e-06 chains differing: 0/48 0/4 chains differ 
+E coop grid24 warp tc: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 7.46e-06 chains differing: 0/48 0/4 chains differ 
+E coop grid24 warp h100: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 6.78e-06 chains differing: 0/48 0/4 chains differ 
+E coop sq46 sweep warp tc: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 6.98e-06 chains differing: 0/48 0/4 chains differ 
+E coop sq46 sweep warp gpu: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 3.63e-06 chains differing: 0/48 0/4 chains differ 
+E coop sq46 sweep warp h100: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 2.01e-06 chains differing: 0/48 0/4 chains differ 
+E coop sq46 sweep warpsm tc: SKIP (chains do not fit in shared memory on this GPU)
+E coop sq46 sweep warpsm gpu: SKIP (chains do not fit in shared memory on this GPU)
+E coop sq46 sweep warpsm h100: SKIP (chains do not fit in shared memory on this GPU)
+E coop sq46 sweep slices: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 5.95e-06 chains differing: 0/48 0/4 chains differ 
+E coop sq46 sweep sums off: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 6.98e-06 chains differing: 0/48 0/4 chains differ 
+E coop grid45 sums forced: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 1.06e-05 chains differing: 0/48 0/4 chains differ 
+E coop sq46 sweep slicemoves: CHECK PASSED | 956/1920 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 2.98e-06 
+F block sat100 wpc2 tc: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 7.76e-06 chains differing: 0/48 0/4 chains differ 
+F block sat100 wpc2 h100: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 6.88e-06 chains differing: 0/48 0/4 chains differ 
+F block sat100 wpc4 tc: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 7.76e-06 chains differing: 0/48 0/4 chains differ 
+F block sat100 wpc4 h100: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 6.88e-06 chains differing: 0/48 0/4 chains differ 
+F block sat100 wpc16 tc: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 7.76e-06 chains differing: 0/48 0/4 chains differ 
+F block sat100 wpc16 h100: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 6.88e-06 chains differing: 0/48 0/4 chains differ 
+F block reg3_250 wpc2 tc: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 1.1e-05 chains differing: 0/48 0/4 chains differ 
+F block reg3_250 wpc2 h100: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 1.52e-06 chains differing: 0/48 0/4 chains differ 
+F block reg3_250 wpc4 tc: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 1.1e-05 chains differing: 0/48 0/4 chains differ 
+F block reg3_250 wpc4 h100: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 1.52e-06 chains differing: 0/48 0/4 chains differ 
+F block reg3_250 wpc16 tc: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 1.1e-05 chains differing: 0/48 0/4 chains differ 
+F block reg3_250 wpc16 h100: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 1.52e-06 chains differing: 0/48 0/4 chains differ 
+F block lat14 wpc2 tc: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 4.21e-06 chains differing: 0/48 0/4 chains differ 
+F block lat14 wpc2 h100: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 9.83e-07 chains differing: 0/48 0/4 chains differ 
+F block lat14 wpc4 tc: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 4.21e-06 chains differing: 0/48 0/4 chains differ 
+F block lat14 wpc4 h100: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 9.83e-07 chains differing: 0/48 0/4 chains differ 
+F block lat14 wpc16 tc: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 4.21e-06 chains differing: 0/48 0/4 chains differ 
+F block lat14 wpc16 h100: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 9.83e-07 chains differing: 0/48 0/4 chains differ 
+F block grid24 wpc2 tc: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 7.46e-06 chains differing: 0/48 0/4 chains differ 
+F block grid24 wpc2 h100: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 6.78e-06 chains differing: 0/48 0/4 chains differ 
+F block grid24 wpc4 tc: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 7.46e-06 chains differing: 0/48 0/4 chains differ 
+F block grid24 wpc4 h100: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 6.78e-06 chains differing: 0/48 0/4 chains differ 
+F block grid24 wpc16 tc: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 7.46e-06 chains differing: 0/48 0/4 chains differ 
+F block grid24 wpc16 h100: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 6.78e-06 chains differing: 0/48 0/4 chains differ 
+F block grid45 wpc2 tc: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 1.29e-05 chains differing: 0/48 0/4 chains differ 
+F block grid45 wpc2 h100: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 1.06e-05 chains differing: 0/48 0/4 chains differ 
+F block grid45 wpc4 tc: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 1.29e-05 chains differing: 0/48 0/4 chains differ 
+F block grid45 wpc4 h100: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 1.06e-05 chains differing: 0/48 0/4 chains differ 
+F block grid45 wpc16 tc: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 1.29e-05 chains differing: 0/48 0/4 chains differ 
+F block grid45 wpc16 h100: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 1.06e-05 chains differing: 0/48 0/4 chains differ 
+F block sq46 sweep wpc8 tc: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 6.98e-06 chains differing: 0/48 0/4 chains differ 
+F block sq46 sweep wpc8 gpu: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 3.63e-06 chains differing: 0/48 0/4 chains differ 
+F block sq46 sweep wpc8 h100: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 2.01e-06 chains differing: 0/48 0/4 chains differ 
+F block sat100 random init wpc4: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 9.86e-06 chains differing: 0/48 0/4 chains differ 
+F block reg3_250 coop forced wpc4: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 1.52e-06 chains differing: 0/48 0/4 chains differ 
+F block grid24 slices wpc4: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 4.82e-06 chains differing: 0/48 0/4 chains differ 
+F block grid28 slicemoves wpc4: CHECK PASSED | 1324/1920 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 5.61e-06 
 ALL CHECKS PASSED

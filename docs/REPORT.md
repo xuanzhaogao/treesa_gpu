@@ -61,7 +61,8 @@ GPU kernels and a CPU reference bit for bit.
 | `seqsm` (c) | one thread per chain, a block's chains staged in shared memory per launch | smem |
 | `warp` (a') | **one warp (or 16/8 lanes, `--lpc`) per chain; lanes process up to 32 ready nodes concurrently** (work list of nodes whose parent is done, in smem) | global |
 | `warpsm` | as `warp`, chain staged in shared memory for the launch (`niters` sweeps) | smem |
-| `auto` | `warpsm` if 8 chains fit per block, or if the population exceeds L2 and ≥4 fit; else `warp` | |
+| `block` | **one thread block of `wpc` warps per chain** (shared work list, block-wide prefix sum for the pushes); for few long chains | global |
+| `auto` | `warpsm` if 8 chains fit per block, or if the population exceeds L2 and ≥4 fit; else `block` when chains ≤ 8 per SM (`wpc` = 16 warps per SM / chains per SM, at most 8), else `warp` | |
 
 The literal option (a) "lanes own bitset words" was not built: here `W` is 2–12 words, so ≥ 20 of 32
 lanes would idle, while lanes-own-nodes keeps lanes busy with independent work and also cuts the
@@ -104,6 +105,28 @@ so the wide path is bit-identical to the fast path and to the CPU reference (tes
 ids are 16-bit (≤ 32767 tensors); per-chain memory ≈ (m−1)(NW+1)·4 B (grid L=45: 1.6 MB/chain);
 the work list of the warp kernel lives in shared memory (2 bytes/node).
 
+### Cooperative visits, chunk summaries, one block per chain (large networks)
+Three additions for networks with thousands of labels, where few long chains are needed and a visit
+streams 5·NW words (all bit-identical to the other kernels; tested in sections E and F below):
+* **Cooperative visits** (`--coop-max`, `--coop-min`, `--coop-min-units`): when k < 32 nodes are ready, each
+  gets G = 32 / nextpow2(k) lanes (a power of 2, at most NW/4 chunks / `coop_min_units`), which split the
+  node's 16-byte chunks and sum the integer move counters with `__shfl_xor_sync`; every lane then
+  evaluates the same energy and acceptance, and writes its own chunks of the new label set.  On a
+  path-like tree (row-major sweep of a lattice: k = 1 at almost every step) the whole warp works on one
+  node instead of one lane.  Default on above 512 labels; off for the register fast path (≤ 512 labels),
+  where one visit is a single memory round trip either way and the reductions made it 1.3–2× slower.
+* **Chunk summaries** (`--sums` / `--no-sum`, automatic from NW ≥ 128 words = 4096 labels): one bit per
+  16-byte chunk of every internal label set (and of the leaves) says whether the chunk is nonzero.  A
+  visit loads only the chunks set in sum(K) | sum(M) | sum(O) | sum(D), which contain every nonzero
+  chunk of the six sets involved; an accepted move rewrites those chunks of P and P's summary.  On
+  lattices a node's labels are local, so this skips most of the bitset.  Below 4096 labels the extra
+  bookkeeping cost 3–17 %, hence the threshold.
+* **One thread block per chain** (`--kernel block`, `--wpc`): the warps of a block share the chain's
+  work list; each step every warp takes ceil(k / wpc) ready nodes (with cooperative lanes as above),
+  and the children are pushed back after a block-wide prefix sum of the per-warp counts.  With 72
+  chains a warp-per-chain kernel puts one warp on each SM of the RTX 6000, and the run is
+  latency-bound; 8 warps per chain hide the latency.
+
 ### Slicing (`slicing=True`)
 * Every chain carries a slice set S (an `NW`-word bitset after the tree).  Stored node labels stay
   *unsliced*: the labels of the sliced network are exactly `labels & ~S` (slicing removes the label from
@@ -137,7 +160,11 @@ the work list of the warp kernel lives in shared memory (2 bytes/node).
   init; **B** the wide label path (`--wide` on sat40/sat100/reg3_250, automatic on grid24 (576 labels)
   and grid45 (2025 labels)) × {seq, warp} × {tc, h100}; **C** fixed random slice sets (8 labels per
   chain) on sat100/reg3_250/grid24 × {seq, warp, warpsm} × {tc, h100}; **D** slice moves on
-  (sat100/grid24/grid28 × {warp, warpsm} × {tc, h100}).  Per configuration:
+  (sat100/grid24/grid28 × {warp, warpsm} × {tc, h100}); **E** cooperative visits (forced on sat100, reg3_250,
+  grid24 with one word per lane; automatic on a 46×46 lattice (4140 labels) from the row-major sweep,
+  i.e. G = 32, with chunk summaries on and off, fixed slices and slice moves); **F** the block kernel
+  (`wpc` 2 / 4 / 16 on sat100, reg3_250, lat14, grid24, grid45; `wpc` 8 on the 46×46 lattice; random
+  init, fixed slices, slice moves, forced cooperative visits).  Per configuration:
   1. every chain is a valid tree and the **incrementally maintained labels equal a from-scratch
      recomputation from the topology** (occurrence counting) for every internal node;
   2. GPU per-chain energy kernel == host double-precision recomputation (criterion |Δlog2| < 1e-3,
@@ -147,7 +174,7 @@ the work list of the warp kernel lives in shared memory (2 bytes/node).
      sets, literal `ruleset`/`abcacb`/`tcscrw`/`update_tree!`) gives **bit-identical** trees.
   (3) and (4) run for fixed slice sets (C: the reference uses Julia's slicer semantics, sliced log2
   size 0) and are skipped for D (only the warp kernels implement slice moves).
-  Result (`tests/check_results_sm75.txt`): **248/248 passed**, 18 skipped (chains that do not fit in
+  Result (`tests/check_results_sm75.txt`): **298/298 passed**, 21 skipped (chains that do not fit in
   Turing's 64 KB shared memory for the smem kernels).
 * `tests/test_python.py` — `trees.complexity` == omeco `tree.complexity` on omeco greedy/TreeSA
   trees; dict↔children round trip; for all schemes/inits/modes the returned dict contains every
@@ -682,6 +709,46 @@ warps per chain for long schedules (moves on disjoint subtrees), and a partition
 16-bit, so networks above 32767 tensors are rejected (257 of the 1000 MCC 2020–2024 model-counting
 instances after unit propagation).
 
+### New kernels: cooperative visits, chunk summaries, one block per chain (raw data `large_compare_gpu_v3.jsonl`)
+
+The second item is now implemented (see [Design](#cooperative-visits-chunk-summaries-one-block-per-chain-large-networks)):
+idle lanes share a node's label words, lattices skip zero chunks, and with few chains each chain gets a block of
+up to 8 warps.  The same runs as above on the same RTX 6000 give **identical trees** (every tc / sc equal; the
+annealer depends only on the seed):
+
+| instance (labels) | 72×50 old → new | 72×150 old → new | 576×20 old → new | from the sweep, 576×5 / 72×20 old → new |
+|---|---:|---:|---:|---:|
+| sat500 (500) | 6 → 5 s (1.1×) | 17 → 16 s (1.0×) | 12 → 12 s (1.0×) | – |
+| grid32 (1024) | 25 → 20 s (1.2×) | 82 → 67 s (1.2×) | 18 → 16 s (1.2×) | – |
+| reg3_1000 (1500) | 24 → 17 s (1.4×) | 71 → 49 s (1.5×) | 13 → 9 s (1.4×) | – |
+| sq32 (1984) | 42 → 24 s (1.8×) | 142 → 81 s (1.8×) | 24 → 13 s (1.9×) | 5 → 3 s / 13 → 8 s (1.7×) |
+| grid45 (2025) | 92 → 42 s (2.2×) | 303 → 140 s (2.2×) | 96 → 88 s (1.1×) | – |
+| reg3_2000 (3000) | 85 → 37 s (2.3×) | 262 → 112 s (2.3×) | 52 → 23 s (2.2×) | – |
+| sq48 (4512) | 216 → 47 s (4.6×) | – → 167 s | 111 → 34 s (3.3×) | 24 → 6 s (3.9×) / 67 → 13 s (5.1×) |
+| sq64 (8064) | 801 → 87 s (**9.2×**) | – → 284 s | 464 → 111 s (4.2×) | 89 → 17 s (5.1×) / – → 24 s |
+
+Per chain (72 chains), a GPU chain now advances at about 0.6–1.2 of an omeco core on the networks above 1000
+labels (was 0.08–0.9; sat500 4.9).  On the H100 PCIe (intermediate build with 16 warps per chain, otherwise the
+same kernels) the 72×50 runs are 1.6–8.0× faster than with the original kernels (sq64 821 → 103 s, grid45
+101 → 30 s, reg3_2000 92 → 28 s; sat500 0.82×, as that build still used cooperative visits below 512 labels).
+With that same build on both GPUs, the H100 is 1.2–1.6× faster than the RTX 6000, except on sq48 / sq64
+(0.92×); table in `bench/results/large_summary.md`.
+
+**Updated answer.**  At matched wall time, against omeco on 12 threads (table above, GPU v2 rows):
+* GPU ahead: sat500 (329.8 in 16 s vs 345.2 in 21 s; 325.3 in 83 s vs 327.7 in 82 s), grid45 at short times
+  (95.1 in 42 s vs 103.8 in 47 s), reg3_2000 (270.9 in 37 s vs 276.4 in 39 s; 261.1 in 112 s vs 268.1 in 146 s),
+  sq64 from greedy (89.0 in 87 s vs 91.1 in 56 s; 86.7 in 284 s vs 93.4 in 249 s), sq32 (44.9 in 13 s vs 46.1 in
+  8 s and 47.0 in 36 s), reg3_1000 (131.3 in 17 s vs 132.1 in 42 s).
+* Equal or omeco ahead: grid45 at ~150 s (90.9 in 140 s vs 90.7 in 187 s), grid32 (61.5 in 20 s vs 61.6 in 21 s;
+  omeco 60.4 in 85 s, GPU 60.7 only after 231 s), sq48 from greedy (omeco 63.4 in 102 s; GPU 66.3 in 167 s).
+* The GPU's leads are 0.8–15 log2 units: largest at short times (sat500, grid45), 1–7 at 100–250 s.
+* Starting from a good tree is still where the GPU helps most: from the row-major sweep, sq48 61.7 in 6 s and
+  sq64 78.7 in 17 s (omeco from greedy: 63.4 and 91.1–93.4 after 100–250 s).
+
+Still open: the label sets remain dense bitsets (a visit costs O(NW); summaries help only when labels are
+local, as on lattices), the block kernel splits only a step's ready nodes (no moves on disjoint subtrees), and
+there is no partitioning-based initial tree.
+
 ## Known limitations
 
 * Only the TreeSA core (+ in-annealer slicing): TreeDecomp, `rw_weight = 0`; no PathDecomp, omeco's
@@ -705,7 +772,8 @@ instances after unit propagation).
   and worker7273, e.g. sat70 T=30: 744 vs 355 s modeled), so treat single omeco numbers as one sample.
 * Lane occupancy of the warp kernel is bounded by the width of the "ready" frontier: ~0.4–0.5 on
   SAT trees, ~0.19 on deep (path-like) trees such as reg3_250; packing several chains per warp does
-  not help (divergence).
+  not help (divergence).  Cooperative visits fill the idle lanes above 512 labels only; below, a
+  visit is too short for the lane-sharing reductions to pay off.
 * Population annealing uses the global energy `log2 Σ 2^tc + sc penalty`, while the Metropolis moves
   use Julia's local surrogate `dtc` (not a Δ of that global energy), so PA here is a heuristic
   selection scheme, not an unbiased sampler.  It loses diversity: by the end, the population
@@ -725,7 +793,7 @@ instances after unit propagation).
 |---|---|
 | `csrc/common.h` | host/device shared code: Philox4x32-10, GPU cost models v1/v2, `MoveCounts`/`acc_counts`/`energy_from_counts` (abcacb + dE from popcount counters), rule selection, Metropolis |
 | `csrc/cpu_ref.h` | CPU reference: literal port of Julia `optimize_subtree!` with vector label sets and Julia-`Slicer` masking |
-| `csrc/treesa_gpu.cu` | kernels (`k_seq`, `k_warp` with slice moves, `k_energy`, `k_copy`; register fast path W ≤ 16 and wide streaming path W = 0), host init (random/greedy trees, topology labels, slice sets), annealing driver with population schemes, stage 2, slicing selection + greedy repair, `--check` validation mode, CLI |
+| `csrc/treesa_gpu.cu` | kernels (`k_seq`, `k_warp` with slice moves and cooperative visits, `k_block`, `k_energy`, `k_copy`; register fast path W ≤ 16 and wide streaming path W = 0, with optional chunk summaries), host init (random/greedy trees, topology labels, slice sets), annealing driver with population schemes, stage 2, slicing selection + greedy repair, `--check` validation mode, CLI |
 | `treesa_gpu/driver.py`, `treesa_gpu/trees.py` | Python API `optimize(..., slicing=...)`, `runner_json`, instance writer, omeco-dict ↔ tree conversion |
 | `Makefile` | `make` (local GPU, `ARCH=native`) / `make ARCH=sm_90a OUT=treesa_gpu/bin/treesa_gpu_sm90` |
 | `tests/run_checks.sh`, `tests/check_results_sm75.txt` | kernel validation matrix and its output |
@@ -736,6 +804,7 @@ instances after unit propagation).
 | `bench/compare.py`, `bench/summarize.py` | omeco vs GPU quality/wallclock benchmark and tables |
 | `bench/h100_study.py` | tc vs h100 (measured H100 model) study → `bench/results/h100_study.md` |
 | `bench/slicing_compare.py`, `bench/summarize_slicing.py` | slicing comparison (omeco + slice_code / greedy_slice / in-annealer) on any host, tables → `bench/results/slicing_summary.md` |
+| `bench/large_compare.py`, `bench/summarize_large.py` | large networks (1000–8000 tensors): GPU configurations, omeco, row-major sweep → `bench/results/large_compare_*.jsonl`, `large_summary.md` |
 | `bench/save_best.py`, `bench/extra_seeds.py` | best trees per instance/target → `trees/gpusa_slice/` (repository root) |
 | `trees/gpusa_slice/` (repository root) | `<name>_sc<T>_{tc,h100,best}.json` = `{"tree", "sliced"}` (tree iy on the sliced ixs, sliced = original labels), metrics in `index.json` |
 | `bench/results/` | raw results (`compare.jsonl`, `slicing_compare{,_h100,_worker7273}.jsonl`, `throughput_rtx6000.txt`, `throughput_vs_W_{rtx6000,h100}.txt`, `h100_*.md`, logs) and summaries |
