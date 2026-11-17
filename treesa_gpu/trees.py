@@ -108,13 +108,16 @@ def tree_gpu_time(d, ixs, model=GPU_MODEL):
 #   small contractions (out rank <= 14) run batched per tree level -> ~free
 # ---------------------------------------------------------------------------
 H100_MODEL = dict(
+    # refitted 2026-11-17 on booltn-gpu results/cost_model/bench_kernels_v3.json (booltn 5d923c5: perm4 permutes, cc2 / ccd);
+    # previous (v2): perm_bw_bits 8.0e12, cc_bit 6.25e-14, cc_cell 1.97e-14, tc_bit 2.78e-14, tc_pad_cell 7.6e-17,
+    # tc_out_bit 2.14e-13. Same functional form; booltn.tree_utils.H100_MODEL holds the same values.
     launch=4e-6,             # per kernel launch inside a CUDA graph (s)
-    perm_bw_bits=8.0e12,     # permutation throughput, bits/s each way (~1 TB/s)
-    cc_bit=6.25e-14,         # cc: s per bit moved (A+B+C)
-    cc_cell=1.97e-14,        # cc: s per 2^(B+M+N+K) cell (~100 TOPS)
-    tc_bit=2.78e-14,         # tc: s per bit moved
-    tc_pad_cell=7.6e-17,     # tc: s per padded cell 2^(B+max(M,6)+max(N,6)+max(K,8))
-    tc_out_bit=2.14e-13,     # tc: s per output bit (threshold + pack epilogue)
+    perm_bw_bits=1.23e13,    # permutation throughput, bits/s each way (perm4: ~1.5 TB/s read + write)
+    cc_bit=5.44e-14,         # cc: s per bit moved (A+B+C)
+    cc_cell=7.68e-15,        # cc: s per 2^(B+M+N+K) cell
+    tc_bit=6.37e-14,         # tc: s per bit moved
+    tc_pad_cell=2.02e-16,    # tc: s per padded cell 2^(B+max(M,6)+max(N,6)+max(K,8))
+    tc_out_bit=1.77e-13,     # tc: s per output bit (threshold + pack epilogue)
     small_rank=14,           # contractions with output rank <= this are batched (no permutes)
     small_cell=1e-12,        # s per (output bit x summed combo) in the batched small kernel
 )

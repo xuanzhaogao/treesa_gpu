@@ -1292,7 +1292,7 @@ struct Opts {
   double gm[6] = {11.9e15, 1.6e13, 6, 6, 8, 4e-6};  // peak ops/s, bw bits/s, m0, n0, k0, launch s
   // H100 model (trees.H100_MODEL): launch, perm_bw_bits, cc_bit, cc_cell, tc_bit, tc_pad_cell,
   // tc_out_bit, small_rank, small_cell
-  double h100m[9] = {4e-6, 8.0e12, 6.25e-14, 1.97e-14, 2.78e-14, 7.6e-17, 2.14e-13, 14, 1e-12};
+  double h100m[9] = {4e-6, 1.23e13, 5.44e-14, 7.68e-15, 6.37e-14, 2.02e-16, 1.77e-13, 14, 1e-12};   // = trees.H100_MODEL (refit 2026-11-17)
   int mode2 = 1;  // energy mode of stage 2 (1 = gpu, 2 = h100)
   int max_levels = -1;
 };
