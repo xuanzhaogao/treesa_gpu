@@ -258,6 +258,11 @@ Balanced trees over the same ordering are much worse (sq32 100.5) than the path.
   byte-identical to the output before the parallel order existed (`tests/test_python_results_preorder.txt`).
 * Cross-GPU determinism: the H100 (sm_90a build) reproduced all 96 GPU results of the slicing
   comparison bit-for-bit (same #sliced, same modeled time) — trees do not depend on the GPU.
+* H100 build of the final source (parallel order, spectral start, `select`; `treesa_gpu_sm90`, installed
+  2026-11-17 after passing): `tests/run_checks.sh` **367/367 passed**, 9 skipped (the H100's 228 KB shared memory
+  fits 12 of the smem chains that Turing skips; `bench/results/check_results_sm90_par.txt`) and
+  `tests/test_python.py` **69/69 passed** with output lines identical to the RTX 6000's
+  (`bench/results/test_python_sm90_par.txt`).
 * All 72 saved trees in `trees/gpusa_slice/` (repository root) were re-validated independently (leaves,
   `iy` on sliced ixs, sc ≤ target, tc and modeled time equal to `index.json`).
 
@@ -889,6 +894,11 @@ Ladder against omeco (12 threads) and the pre-order kernels, single seed (`large
   from the row-major sweep 61.7 in 2 s.
 * Before the parallel order the GPU was ahead on 6 of 8 only at short budgets and behind on grid32 and sq48.
 * Single seeds at the long end are noisy (grid32 61.3 after 90 s vs 60.0 after 18 s; sq32 45.1 after 70 s).
+* **H100 PCIe** (same configurations, `bench/results/large_compare_h100_par.jsonl`): all 36 runs that also exist on
+  the RTX 6000 (72×50 and 72×150 from greedy, 72×20 from the row sweep, 72 × 20 / 100 / 300 from the spectral start)
+  give **identical trees** (same tc), and kernel time is **1.3–2.0× lower** (sat500 1.3×, reg3 / grid45 / sq64
+  1.6–1.7×, sq32 / sq48 / grid32 1.8–2.0×).  With one block per chain, 72 chains use 72 of the H100's 114 SMs, so
+  this is per-SM speed only; more chains per run come free on the H100 until ~114.
 
 Downstream use (booltn root trees: grid 3-SAT L30 α3.0, 1024 chains × 50, sc target 34 / 30, sc_weight 4 / 16; 2
 seeds each): par gives sc 50 / 50 and 48 / 47 vs pre-order 50 / 47 and 47 / 48 at 0.84× the time; with 1024 chains

@@ -1,0 +1,70 @@
+ok   sat40: trees == omeco complexity (GreedyMethod: 35.277/31)
+ok   sat40: dict<->children round trip
+ok   sat40: trees == omeco complexity (TreeSA: 30.970/28)
+ok   sat40: dict<->children round trip
+ok   sat40 indep greedy tc    : valid=True iy=True tc 29.7836==29.7836 sc 27==27 time 1.1970e-03==1.1970e-03 time2 3.6581e-04==3.6581e-04
+ok   sat40 indep random tc    : valid=True iy=True tc 29.5676==29.5676 sc 27==27 time 9.6803e-04==9.6802e-04 time2 3.7350e-04==3.7350e-04
+ok   sat40 pa    greedy tc    : valid=True iy=True tc 29.9017==29.9017 sc 26==26 time 9.3548e-04==9.3548e-04 time2 3.6414e-04==3.6414e-04
+ok   sat40 pa    greedy gpu   : valid=True iy=True tc 35.8670==35.8670 sc 31==31 time 2.3103e-03==2.3103e-03 time2 4.2119e-03==4.2119e-03
+ok   sat40 pa    greedy tc+gpu: valid=True iy=True tc 32.1083==32.1083 sc 28==28 time 7.7636e-04==7.7636e-04 time2 7.6686e-04==7.6686e-04
+ok   sat40 pa    greedy h100  : valid=True iy=True tc 32.6213==32.6213 sc 28==28 time 8.2390e-04==8.2390e-04 time2 5.3704e-04==5.3704e-04
+ok   sat40 pa    greedy tc+h100: valid=True iy=True tc 29.9017==29.9017 sc 26==26 time 9.3548e-04==9.3548e-04 time2 3.6414e-04==3.6414e-04
+ok   sat40 pa    random tc    : valid=True iy=True tc 28.8457==28.8457 sc 26==26 time 1.4844e-03==1.4844e-03 time2 3.3149e-04==3.3149e-04
+ok   sat40 trunc greedy tc    : valid=True iy=True tc 30.1178==30.1178 sc 27==27 time 9.7189e-04==9.7189e-04 time2 3.5118e-04==3.5118e-04
+ok   sat40 trunc random tc    : valid=True iy=True tc 29.9579==29.9579 sc 27==27 time 1.2959e-03==1.2959e-03 time2 3.9504e-04==3.9504e-04
+ok   sat60: trees == omeco complexity (GreedyMethod: 58.594/55)
+ok   sat60: dict<->children round trip
+ok   sat60: trees == omeco complexity (TreeSA: 52.471/49)
+ok   sat60: dict<->children round trip
+ok   sat60 indep greedy tc    : valid=True iy=True tc 49.7454==49.7454 sc 47==47 time 2.2162e+02==2.2162e+02 time2 9.9447e+01==9.9447e+01
+ok   sat60 indep random tc    : valid=True iy=True tc 49.7558==49.7558 sc 46==46 time 6.1003e+01==6.1003e+01 time2 7.9782e+01==7.9782e+01
+ok   sat60 pa    greedy tc    : valid=True iy=True tc 47.5760==47.5760 sc 44==44 time 2.6141e+01==2.6141e+01 time2 2.1718e+01==2.1718e+01
+ok   sat60 pa    greedy gpu   : valid=True iy=True tc 58.2035==58.2035 sc 53==53 time 2.8922e+03==2.8922e+03 time2 1.2780e+04==1.2780e+04
+ok   sat60 pa    greedy tc+gpu: valid=True iy=True tc 49.3996==49.3996 sc 44==44 time 6.5119e+00==6.5119e+00 time2 3.4053e+01==3.4053e+01
+ok   sat60 pa    greedy h100  : valid=True iy=True tc 52.9260==52.9260 sc 49==49 time 3.3087e+02==3.3087e+02 time2 5.7675e+02==5.7675e+02
+ok   sat60 pa    greedy tc+h100: valid=True iy=True tc 48.2418==48.2418 sc 44==44 time 2.0211e+01==2.0211e+01 time2 2.0171e+01==2.0171e+01
+ok   sat60 pa    random tc    : valid=True iy=True tc 46.2580==46.2580 sc 43==43 time 1.5691e+01==1.5691e+01 time2 1.0121e+01==1.0121e+01
+ok   sat60 trunc greedy tc    : valid=True iy=True tc 48.0776==48.0776 sc 43==43 time 1.6704e+00==1.6704e+00 time2 1.0473e+01==1.0473e+01
+ok   sat60 trunc random tc    : valid=True iy=True tc 46.8763==46.8763 sc 44==44 time 4.3171e+01==4.3171e+01 time2 1.9110e+01==1.9110e+01
+ok   reg3_100: trees == omeco complexity (GreedyMethod: 23.511/16)
+ok   reg3_100: dict<->children round trip
+ok   reg3_100: trees == omeco complexity (TreeSA: 17.201/11)
+ok   reg3_100: dict<->children round trip
+ok   reg3_100 indep greedy tc    : valid=True iy=True tc 17.1566==17.1566 sc 11==11 time 3.9602e-04==3.9602e-04 time2 1.4610e-07==1.4610e-07
+ok   reg3_100 indep random tc    : valid=True iy=True tc 17.1563==17.1563 sc 11==11 time 3.9602e-04==3.9602e-04 time2 1.4607e-07==1.4607e-07
+ok   reg3_100 pa    greedy tc    : valid=True iy=True tc 17.1563==17.1563 sc 11==11 time 3.9602e-04==3.9602e-04 time2 1.4607e-07==1.4607e-07
+ok   reg3_100 pa    greedy gpu   : valid=True iy=True tc 28.4332==28.4332 sc 19==19 time 3.9688e-04==3.9688e-04 time2 2.7856e-04==2.7856e-04
+ok   reg3_100 pa    greedy tc+gpu: valid=True iy=True tc 17.1563==17.1563 sc 11==11 time 3.9602e-04==3.9602e-04 time2 1.4607e-07==1.4607e-07
+ok   reg3_100 pa    greedy h100  : valid=True iy=True tc 17.1563==17.1563 sc 11==11 time 3.9602e-04==3.9602e-04 time2 1.4607e-07==1.4607e-07
+ok   reg3_100 pa    greedy tc+h100: valid=True iy=True tc 17.1563==17.1563 sc 11==11 time 3.9602e-04==3.9602e-04 time2 1.4607e-07==1.4607e-07
+ok   reg3_100 pa    random tc    : valid=True iy=True tc 17.1566==17.1566 sc 11==11 time 3.9602e-04==3.9602e-04 time2 1.4610e-07==1.4610e-07
+ok   reg3_100 trunc greedy tc    : valid=True iy=True tc 17.1563==17.1563 sc 11==11 time 3.9602e-04==3.9602e-04 time2 1.4607e-07==1.4607e-07
+ok   reg3_100 trunc random tc    : valid=True iy=True tc 17.1563==17.1563 sc 11==11 time 3.9602e-04==3.9602e-04 time2 1.4607e-07==1.4607e-07
+ok   lat10: trees == omeco complexity (GreedyMethod: 28.469/20)
+ok   lat10: dict<->children round trip
+ok   lat10: trees == omeco complexity (TreeSA: 20.341/15)
+ok   lat10: dict<->children round trip
+ok   lat10 indep greedy tc    : valid=True iy=True tc 20.2293==20.2293 sc 15==15 time 1.5967e-03==1.5967e-03 time2 2.5113e-05==2.5113e-05
+ok   lat10 indep random tc    : valid=True iy=True tc 20.6921==20.6921 sc 16==16 time 1.5968e-03==1.5968e-03 time2 7.2750e-05==7.2750e-05
+ok   lat10 pa    greedy tc    : valid=True iy=True tc 20.2198==20.2198 sc 15==15 time 1.5966e-03==1.5966e-03 time2 1.3164e-05==1.3164e-05
+ok   lat10 pa    greedy gpu   : valid=True iy=True tc 32.3184==32.3184 sc 25==25 time 1.7106e-03==1.7106e-03 time2 6.4573e-04==6.4573e-04
+ok   lat10 pa    greedy tc+gpu: valid=True iy=True tc 20.2198==20.2198 sc 15==15 time 1.5966e-03==1.5966e-03 time2 1.3164e-05==1.3164e-05
+ok   lat10 pa    greedy h100  : valid=True iy=True tc 20.9875==20.9875 sc 14==14 time 1.5965e-03==1.5965e-03 time2 2.0790e-06==2.0790e-06
+ok   lat10 pa    greedy tc+h100: valid=True iy=True tc 20.3045==20.3045 sc 14==14 time 1.5967e-03==1.5967e-03 time2 1.2950e-06==1.2950e-06
+ok   lat10 pa    random tc    : valid=True iy=True tc 20.6428==20.6428 sc 15==15 time 1.5967e-03==1.5967e-03 time2 3.7017e-05==3.7017e-05
+ok   lat10 trunc greedy tc    : valid=True iy=True tc 20.2149==20.2149 sc 15==15 time 1.5967e-03==1.5967e-03 time2 3.7046e-05==3.7046e-05
+ok   lat10 trunc random tc    : valid=True iy=True tc 22.0608==22.0608 sc 18==18 time 1.5973e-03==1.5973e-03 time2 1.5727e-04==1.5727e-04
+ok   slicing sat60 tc      T=30: valid=True iy_sliced=True |S|=13 tc/slice 31.797==31.797 sc 29==29<=30 total time 7.2643e+00==7.2643e+00 json=True repair=0
+ok   slicing sat60 tc+h100 T=30: valid=True iy_sliced=True |S|=11 tc/slice 34.148==34.148 sc 30==30<=30 total time 3.5296e+00==3.5296e+00 json=True repair=0
+ok   slicing reg3_250 tc      T=24: valid=True iy_sliced=True |S|=12 tc/slice 30.526==30.526 sc 24==24<=24 total time 2.9706e+00==2.9706e+00 json=True repair=0
+ok   slicing reg3_250 tc+h100 T=24: valid=True iy_sliced=True |S|=11 tc/slice 37.005==37.005 sc 24==24<=24 total time 4.1367e-01==4.1367e-01 json=True repair=0
+ok   slicing grid24 tc      T=34: valid=True iy_sliced=True |S|=10 tc/slice 44.711==44.711 sc 33==33<=34 total time 6.3508e+01==6.3508e+01 json=True repair=0
+ok   slicing grid24 tc+h100 T=34: valid=True iy_sliced=True |S|=7 tc/slice 48.597==48.597 sc 34==34<=34 total time 9.4091e+00==9.4091e+00 json=True repair=0
+ok   spectral sat60: path_cost==complexity True, orders [52.682, 52.682, 53.067] exact True, init=spectral tc 45.6387==45.6387 valid True, init=tree list valid True
+ok   spectral reg3_250: path_cost==complexity True, orders [51.315, 51.315, 51.315] exact True, init=spectral tc 40.3426==40.3426 valid True, init=tree list valid True
+ok   spectral lat14: path_cost==complexity True, orders [35.171, 35.171, 35.182] exact True, init=spectral tc 28.9392==28.9392 valid True, init=tree list valid True
+ok   spectral grid24: path_cost==complexity True, orders [59.04, 59.04, 59.066] exact True, init=spectral tc 49.6833==49.6833 valid True, init=tree list valid True
+ok   select sat60 T=14: sc-first (sc 41, tc 45.421) vs score (sc 41, tc 45.421); unconstrained tc 44.5177==44.5177
+ok   select grid24 T=30: sc-first (sc 40, tc 57.626) vs score (sc 41, tc 53.794); unconstrained tc 49.8427==49.8427
+ok   select reg3_250 T=20: sc-first (sc 32, tc 46.220) vs score (sc 33, tc 41.840); unconstrained tc 40.1845==40.1845
+ALL PYTHON TESTS PASSED
