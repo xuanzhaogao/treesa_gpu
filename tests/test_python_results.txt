@@ -64,4 +64,7 @@ ok   spectral sat60: path_cost==complexity True, orders [52.682, 52.682, 53.067]
 ok   spectral reg3_250: path_cost==complexity True, orders [51.315, 51.315, 51.315] exact True, init=spectral tc 40.3426==40.3426 valid True, init=tree list valid True
 ok   spectral lat14: path_cost==complexity True, orders [35.171, 35.171, 35.182] exact True, init=spectral tc 28.9392==28.9392 valid True, init=tree list valid True
 ok   spectral grid24: path_cost==complexity True, orders [59.04, 59.04, 59.066] exact True, init=spectral tc 49.6833==49.6833 valid True, init=tree list valid True
+ok   select sat60 T=14: sc-first (sc 41, tc 45.421) vs score (sc 41, tc 45.421); unconstrained tc 44.5177==44.5177
+ok   select grid24 T=30: sc-first (sc 40, tc 57.626) vs score (sc 41, tc 53.794); unconstrained tc 49.8427==49.8427
+ok   select reg3_250 T=20: sc-first (sc 32, tc 46.220) vs score (sc 33, tc 41.840); unconstrained tc 40.1845==40.1845
 ALL PYTHON TESTS PASSED

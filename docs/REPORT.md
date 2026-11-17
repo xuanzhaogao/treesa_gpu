@@ -251,8 +251,10 @@ Balanced trees over the same ordering are much worse (sq32 100.5) than the path.
   [])`, per-slice tc / sc / #sliced and `h100_time × 2^|S|` equal the binary's numbers, sc ≤ target,
   and `runner_json` round-trips; spectral starts: `path_cost` equals `trees.complexity` of the path tree (random
   orders, open labels), the returned orderings are permutations with exact tc, and `init="spectral"` / `init="tree"`
-  with a list of trees return valid trees with consistent tc / sc.  **66/66 passed**
-  (`tests/test_python_results.txt`, default order `par`); with `order="preorder"` the first 62 lines are
+  with a list of trees return valid trees with consistent tc / sc; `select="sc"` reports sc ≤ the default selection's
+  (same seed, scheme indep) and the same tree when sc is unconstrained.  **69/69 passed**
+  (`tests/test_python_results.txt`, default order `par`; the first 66 lines are identical to the output before
+  `select` existed); with `order="preorder"` the first 62 lines are
   byte-identical to the output before the parallel order existed (`tests/test_python_results_preorder.txt`).
 * Cross-GPU determinism: the H100 (sm_90a build) reproduced all 96 GPU results of the slicing
   comparison bit-for-bit (same #sliced, same modeled time) — trees do not depend on the GPU.
@@ -927,12 +929,72 @@ from greedy and omeco:
 * booltn root trees (grid 3-SAT L30 α3.0, 1024 chains × 50, sc target 34 / 30 with sc_weight 4 / 16, 2 seeds): same sc
   (50 / 50 and 51 / 47 vs 50 / 50 and 48 / 47 from greedy) with tc lower by 1.5–3.5 (62.9 / 63.0 vs 66.4 / 66.5 at
   target 34), in 48 s vs 61 s.  (With the warps-per-chain floor of the final kernel, par at 1024 chains takes 58 s
-  from greedy vs 96 s for the pre-order warp kernel.)
+  from greedy vs 96 s for the pre-order warp kernel.)  For booltn the sc matters first: see
+  [sc-first selection](#sc-first-selection-for-booltn-root-trees-selectsc-raw-data-benchresultsbooltn_root_scjsonl).
 * Slicing with the H100-time objective (576 × 20, PA, `tc+h100`, slice_every 2, 2 seeds): spectral start better on
   sat80 (modeled total 1.2–1.7e3 vs 1.6–2.4e3 s), reg3_250 (0.031–0.032 vs 0.041–0.068 s) and grid28 (472–491 vs
   693–1042 s), but 4× worse on grid24 T=36 (3.7–4.0 vs 1.0 s): the path start's sc is far above the target, the slicer
   cuts 4 labels early and keeps them, while from greedy no slice was needed.  Hence the default `init="auto"`:
   spectral, or greedy when `slicing=True`.
+
+### sc-first selection for booltn root trees (`select="sc"`, raw data `bench/results/booltn_root_sc.jsonl`)
+
+booltn's branch-and-reduce picks the root tree with the lowest sc (the branches it needs grow with sc − sc_leaf), then
+the lowest tc.  The default selection reports the snapshot with the lowest omeco score 2^tc + w·(2^sc − 2^T); with sc
+≈ 40–50 and tc ≈ 58–66 the tc term dominates, so the reported tree is essentially the lowest-tc one, and lower-sc
+snapshots of the same run are dropped.  `select="sc"` (`--select-sc`) reports the snapshot with the lowest
+max(0, sc − T), then the lowest cost.  With scheme `indep` it does not change the trajectories, so it can only lower
+the reported sc (tested).
+
+Grid 3-SAT L = 30 (booltn's call: 1024 chains × 50, mode tc; the five (T, sc_weight, seed) settings of booltn-gpu's
+`experiments/branching/min_sc_trees.py`; RTX 6000, 46–60 s per run):
+
+| network | start | default selection: sc of the 5 runs | `select="sc"`: sc of the 5 runs (tc of the best) | previous best tree |
+|---|---|---|---|---|
+| L30 α2.5 | spectral | 43, 42, 43, 44, 43 | **40, 40, 40, 40, 40** (58.67) | sc 40, tc 58.37 (best of 5 greedy runs) |
+| L30 α2.5 | greedy | (4 seeds at T 34, w 4: 47, 42, 43, 44) | **40, 40, 40, 40, 40** (58.35) | |
+| L30 α3.0 | spectral | 50, 51, 51, 51, 49 | **46, 46, 46, 46, 46** (64.71) | sc 47, tc 65.81 |
+| L30 α3.0 | greedy | (4 seeds at T 34, w 4: 50, 50, 51, 47) | 46, 47, 47, 46, 47 (67.73) | |
+
+Every single run with `select="sc"` reaches the lowest sc that the five-run protocol found before (α2.5) or one below it
+(α3.0, sc 46 with tc 64.7 from the spectral start vs the old 47 / 65.8).  Lower root sc means fewer leaves (grid
+L26 α2.5 in booltn-gpu: 8 leaves from an sc-38 tree, 24 from an sc-40 tree).
+
+* Default selection, 4 seeds at T 34, w 4: the spectral start gives sc 43 on every seed (α2.5) and 50 on every seed
+  (α3.0) with tc 0.3–3.6 lower than from greedy; the greedy start spreads (47, 42, 43, 44 and 50, 50, 51, 47).
+* sc 40 / 46 look like the floor of this annealer: restarting from the best tree with T = sc − 1 and w 16 (4 rounds of
+  1024 × 20, cold) kept sc and only trimmed tc (α2.5 58.67 → 58.33, α3.0 64.71 → 64.09), and a per-chain adaptive target
+  (each chain's T = its own sc at the last level − 1, w 16; prototype, removed) was worse on 3 of 8 runs (sc 45, 48, 48).
+* booltn uses `select="sc"` for its GPU root trees (`branching.py`, `order="gpu"`), as does booltn-gpu's
+  `experiments/branching/min_sc_trees.py`; the sc-46 tree of L30 α3.0 is saved as
+  `trees/gpusa_count/gridksat_L30_a3.0_minsc_selsc.json` in booltn-gpu.
+
+### After the spectral start: what else was tried (CPU prototypes, RTX 6000, 72 × 100, betas from 1)
+
+* **Annealing the linear order before the tree** (simulated annealing on the ordering, move = insert one tensor up to 8
+  positions away, exact incremental path costs, Metropolis on the log-sum of the changed steps only; 2–10 s of CPU per
+  ordering): the start path trees get much cheaper (sat500 383 → 333, reg3_2000 340 → 259, grid45 101 → 87, grid32 74.5
+  → 64.5 with sc 68 → 57), the annealed trees hardly change (2 seeds: sat500 323.9 / 323.4 vs 322.5 / 322.6 from the
+  plain spectral start, reg3_2000 245.3 / 245.3 vs 246.0 / 249.2, grid45 82.86 / 82.89 vs 82.97 / 82.94, grid32 62.15 /
+  62.22 vs 62.42 / 62.27).  The tree annealer already makes these local improvements of the order.  (Metropolis on the
+  global log-sum does not work: moves away from the peak step change it by ~0, and the walk drifts up, 74.5 → 111.)
+* **Spectral orderings of the label graph** (variables) instead of the tensor graph, tensors keyed by the min / mean /
+  max position of their labels: the same path costs on the grids (grid32 74.2–75.2 vs 74.5, grid45 100.2 vs 101.2),
+  sat500 377.0 vs 383.4, reg3_1000 worse (175.0 vs 167.4).
+* **Diverse greedy starts**: omeco's `GreedyMethod(α, temperature)` takes 0.2–0.6 s per tree on these networks and gives
+  almost no diversity (sat500: 492–496 for every setting; grid32: 98–125).
+* **Label renumbering for locality** (labels numbered by first appearance along the spectral order, so that a node's
+  label set might occupy few 16-byte chunks; chunk summaries forced on): identical trees, no speed-up on reg3_2000
+  (kernel 12.7 s without summaries for both numberings, 14.7 s with).  The cut labels of a random graph connect to random
+  later positions; there is no locality to exploit, and 96-word bitsets at 8 % density are already as compact as lists.
+* **Why grid32 is the exception**: its best tree (59.3, sc 52, greedy start, 72 × 200 seed 2) is two sweeps merged near
+  the root (a 964-clause block covering rows 0–23 × columns 0–17 joins the main sweep 32 levels below the root); a
+  single-sweep start (spectral, annealed: 62.1, sc 55) does not reach that structure.  From greedy the result depends on
+  the seed (59.3–66.1 over the runs in `par_order_study.jsonl`), from spectral it is 62.1–62.6.
+* **Two-phase slicing** (anneal from spectral without slices, sc_weight 1 / 4 / 16, 576 × 10; then slicing from that
+  tree): grid24 T = 36 still ends with 4 slices (modeled 3.6–3.9 s vs 1.0 s from greedy) because phase 1 stops at sc
+  41–42 while greedy-start trees reach 36: on this grid 3-SAT the sweep keeps a ~2-row frontier.  `init="auto"` keeps
+  greedy for slicing.
 
 ## Known limitations
 

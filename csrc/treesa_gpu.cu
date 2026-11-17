@@ -1283,6 +1283,7 @@ struct Opts {
   int niters2 = -1;
   int nchains = 1024, niters = 50, block = 0, wpb = 0, lpc = 32, eval_every = 1, ref_chains = 8, mode = 0;
   bool check = false, quiet = false, cross = true, wide = false, slicing = false, no_sum = false, force_sum = false;
+  bool select_sc = false;  // --select-sc: report the lowest (sc, tc) tree instead of the omeco score (no slicing)
   int slice_moves = 1, slice_every = 1, max_slices = 0, random_slices = 0;
   int coop_max = 0, coop_min_units = -1, coop_min = 1, coop_full = 0, coop_cpl = 2, par_follow = 0, par_band = 0, wpc = 0;  // lanes per node visit (warp kernel): 0 auto (32 wide, off for W > 0), 1 off;
                                                        // min units per lane (-1 auto); lanes per node even when >= 32 are ready
@@ -1334,7 +1335,7 @@ static void usage() {
           "  [--stage2-betas SPEC [--stage2-niters K] [--stage2-mode gpu|h100]]  (continue the population)\n"
           "  [--sc-target x] [--sc-weight y] [--scheme indep|pa|trunc] [--trunc-frac f]\n"
           "  [--slicing [--slice-moves k] [--slice-every s] [--max-slices n] [--init-slices l1,l2,..]]\n"
-          "  [--order par|preorder] [--kernel auto|seq|seqsm|warp|warpsm|block|par [--wpc n]] [--lpc 32|16|8] [--coop-max G] [--coop-min G0] [--coop-full G1] [--par-follow] [--par-band L] [--coop-min-units u] [--wide] [--sums|--no-sum] [--block B] [--wpb W] [--seed s]\n"
+          "  [--order par|preorder] [--kernel auto|seq|seqsm|warp|warpsm|block|par [--wpc n]] [--lpc 32|16|8] [--coop-max G] [--coop-min G0] [--coop-full G1] [--par-follow] [--par-band L] [--coop-min-units u] [--wide] [--sums|--no-sum] [--select-sc] [--block B] [--wpb W] [--seed s]\n"
           "  [--eval-every k] [--out result.json] [--check [--ref-chains R] [--random-slices k]] [--quiet]\n");
   exit(1);
 }
@@ -1389,6 +1390,7 @@ static Opts parse(int argc, char** argv) {
     else if (a == "--wpc") o.wpc = std::stoi(nx());
     else if (a == "--wide") o.wide = true;
     else if (a == "--no-sum") o.no_sum = true;
+    else if (a == "--select-sc") o.select_sc = true;
     else if (a == "--sums") o.force_sum = true;
     else if (a == "--check") o.check = true;
     else if (a == "--no-cross") o.cross = false;
@@ -1729,9 +1731,12 @@ struct Runner {
   //   no slicing, mode 0: omeco ScoreFunction (tc_weight=1): 2^tc + sc_weight*max(0, 2^sc - 2^sc_target)
   //   no slicing, mode 1/2: the log-domain energy below
   //   slicing: feasibility first (sc <= sc_target), then total cost |S| + log2(per-slice cost)
+  //   --select-sc (no slicing): lowest max(0, sc - sc_target) first, then the cost (booltn root trees: the leaves
+  //     branch-and-reduce needs grow with sc - sc_leaf)
   // All scores are in log2 domain (no overflow for tc > 1024).
   double score(float lc, int sc, int ns) const {
     if (O.slicing) return (double)ns + (double)lc + 1000.0 * std::max(0.0, (double)sc - O.sc_target);
+    if (O.select_sc) return 4096.0 * (double)std::max(0.0, (double)sc - O.sc_target) + (double)lc;  // sc first, then cost
     if (mode == 0) {  // log2(2^tc + w*(2^sc - 2^sc_target)) when sc > sc_target, else tc
       double tc = (double)lc;
       if ((double)sc <= O.sc_target || O.sc_weight <= 0) return tc;

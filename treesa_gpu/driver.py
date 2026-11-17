@@ -133,7 +133,7 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
              init="auto", seed=1, scheme="indep", order="par", kernel="auto", trunc_frac=0.25, eval_every=1,
              gpu_model=None, h100_model=None, wpb=0, block=0, lpc=32, init_tree=None, stage2_betas=None,
              stage2_niters=None, slicing=False, slice_moves=1, slice_every=1, max_slices=0, init_slices=None,
-             wide=False, verbose=False, timeout=3600, device=None, coop_max=0, coop_min_units=0, coop_min=1, coop_full=0, coop_chunks=0, spectral_k=4, par_follow=False, par_band=0, chunk_sums=None, wpc=0, **old_names):
+             wide=False, verbose=False, timeout=3600, device=None, coop_max=0, coop_min_units=0, coop_min=1, coop_full=0, coop_chunks=0, spectral_k=4, par_follow=False, par_band=0, chunk_sums=None, wpc=0, select="score", **old_names):
     """Run GPU TreeSA.  Returns (tree_dict, info).
 
     slicing: anneal a slice set S together with the tree (see README).  Then ``tree`` is the tree of
@@ -187,6 +187,10 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
             visit when fewer than 32 nodes are ready, each lane taking at least coop_min_units load units
             (32-bit words, or 16-byte chunks above 512 labels; 0: auto = 2 words / 1 chunk) of every label set;
             coop_min lanes per node even when 32 or more are ready.  Results are bit-identical.
+    select: which tree is reported (tracked over all chains at every beta level).  "score" (default): omeco's
+            ScoreFunction 2^tc + sc_weight*(2^sc - 2^sc_target), which tc dominates when sc is well below tc;
+            "sc": lowest max(0, sc - sc_target) first, then tc (booltn root trees, where the leaves branch-and-reduce
+            needs grow with sc - sc_leaf).  Ignored with slicing (feasibility first there).
     chunk_sums: above 512 labels, keep a summary bit per 16-byte chunk of every label set and visit only the
             nonzero chunks (bit-identical).  None: automatic (from 4096 labels), True / False: force on / off.
     """
@@ -279,6 +283,10 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
         args += ["--par-band", str(par_band)]
     if chunk_sums is not None:
         args += ["--sums" if chunk_sums else "--no-sum"]
+    if select == "sc":
+        args += ["--select-sc"]
+    elif select != "score":
+        raise ValueError(f"select must be 'score' or 'sc', got {select!r}")
     if wpc:
         args += ["--wpc", str(wpc)]
     if block:

@@ -88,7 +88,8 @@ Main options of `optimize` (all of them are documented in its docstring):
 |---|---|
 | `mode` | `"tc"`: omeco score (tc, plus an sc penalty above `sc_target`). `"gpu"` / `"h100"`: modeled GPU time. **`"tc+h100"`**: anneal with `tc`, then continue the same population cold with `h100` (recommended for wall time) |
 | `scheme` | `"indep"` (best of N), `"pa"` (population annealing), `"trunc"` (replace the worst 25 %) |
-| `init` | `"greedy"` (omeco GreedyMethod), `"random"`, `"tree"` (`init_tree=`) |
+| `init` | `"auto"` (default: `"spectral"`, or `"greedy"` with slicing), `"spectral"` (`spectral_k` start orderings), `"greedy"` (omeco GreedyMethod), `"random"`, `"tree"` (`init_tree=` one tree or a list; chain c starts from tree c mod K) |
+| `select` | which tree is reported: `"score"` (default, omeco score; tc dominates it when sc is well below tc) or `"sc"` (lowest sc above `sc_target` first, then tc; for booltn root trees, where sc decides the number of branches) |
 | `slicing`, `slice_every`, `max_slices` | in-annealer slicing; `info["sliced"]` lists the sliced labels |
 | `gpu_model`, `h100_model` | constants of the GPU-time models (defaults: `treesa_gpu.trees.GPU_MODEL{,_V2}`, fitted for booltn on an H100 PCIe) |
 

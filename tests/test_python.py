@@ -6,7 +6,8 @@
 (1) dict <-> children conversion round-trips,
 (2) GPU output trees are valid (binary, every leaf exactly once, internal iy from topology),
 (3) tc / sc / modeled time reported by the binary agree with treesa_gpu.trees on the returned dict,
-for all schemes, inits and energy modes; (4) slicing; (5) spectral initial trees and multi-tree init.
+for all schemes, inits and energy modes; (4) slicing; (5) spectral initial trees and multi-tree init;
+(6) select="sc" (lowest sc first) vs the default selection.
 """
 import math
 import os
@@ -113,6 +114,20 @@ for name in ("sat60", "reg3_250", "lat14", "grid24"):
     ok_l = sorted(tu.leaf_ids(tree2)) == list(range(m)) and info2["valid"] and abs(info2["tc"] - info2["tc_py"]) < 1e-4
     check(ok and ok_o and ok_t and ok_l, f"spectral {name}: path_cost==complexity {ok}, orders {[round(t, 3) for t, _, _ in so]} "
           f"exact {ok_o}, init=spectral tc {info['tc']:.4f}=={info['tc_py']:.4f} valid {ok_t}, init=tree list valid {ok_l}")
+
+# (6) select="sc": with scheme indep the selection rule does not change the trajectories, only which snapshot (chain,
+# beta level) is reported, so the sc-first pick has sc <= the default pick's sc (and the lowest sc over the same
+# snapshots); with sc_target above every sc both rules pick the lowest tc (identical results).
+for name, T in (("sat60", 14), ("grid24", 30), ("reg3_250", 20)):
+    ixs, iy = instances.get(name)
+    r = {}
+    for sel in ("score", "sc"):
+        tree, info = tg.optimize(ixs, iy, nchains=192, niters=3, sc_target=T, sc_weight=4.0, seed=3, select=sel)
+        r[sel] = (info["sc_py"], info["tc_py"], info["valid"] and sorted(tu.leaf_ids(tree)) == list(range(len(ixs))))
+    hi = [tg.optimize(ixs, iy, nchains=96, niters=2, sc_target=1000, seed=5, select=sel)[1]["tc_py"] for sel in ("score", "sc")]
+    check(r["sc"][2] and r["score"][2] and r["sc"][0] <= r["score"][0] and abs(hi[0] - hi[1]) < 1e-9,
+          f"select {name} T={T}: sc-first (sc {r['sc'][0]}, tc {r['sc'][1]:.3f}) vs score (sc {r['score'][0]}, tc {r['score'][1]:.3f}); "
+          f"unconstrained tc {hi[0]:.4f}=={hi[1]:.4f}")
 
 print("ALL PYTHON TESTS PASSED" if fails == 0 else f"{fails} FAILURES")
 sys.exit(1 if fails else 0)
