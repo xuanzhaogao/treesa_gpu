@@ -79,6 +79,7 @@ def write_instance(path, ixs, iy):
 
 def dict_to_children(d, m):
     """omeco dict -> list of (left, right) for internal nodes m..2m-2 (post-order ids, root last)."""
+    sys.setrecursionlimit(max(sys.getrecursionlimit(), 10000, 4 * m))   # path-like start trees are m deep
     ch = []
 
     def rec(t):
