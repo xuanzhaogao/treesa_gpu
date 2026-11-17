@@ -60,4 +60,8 @@ ok   slicing reg3_250 tc      T=24: valid=True iy_sliced=True |S|=12 tc/slice 30
 ok   slicing reg3_250 tc+h100 T=24: valid=True iy_sliced=True |S|=11 tc/slice 37.005==37.005 sc 24==24<=24 total time 4.1367e-01==4.1367e-01 json=True repair=0
 ok   slicing grid24 tc      T=34: valid=True iy_sliced=True |S|=10 tc/slice 44.711==44.711 sc 33==33<=34 total time 6.3508e+01==6.3508e+01 json=True repair=0
 ok   slicing grid24 tc+h100 T=34: valid=True iy_sliced=True |S|=7 tc/slice 48.597==48.597 sc 34==34<=34 total time 9.4091e+00==9.4091e+00 json=True repair=0
+ok   spectral sat60: path_cost==complexity True, orders [52.682, 52.682, 53.067] exact True, init=spectral tc 45.6387==45.6387 valid True, init=tree list valid True
+ok   spectral reg3_250: path_cost==complexity True, orders [51.315, 51.315, 51.315] exact True, init=spectral tc 40.3426==40.3426 valid True, init=tree list valid True
+ok   spectral lat14: path_cost==complexity True, orders [35.171, 35.171, 35.182] exact True, init=spectral tc 28.9392==28.9392 valid True, init=tree list valid True
+ok   spectral grid24: path_cost==complexity True, orders [59.04, 59.04, 59.066] exact True, init=spectral tc 49.6833==49.6833 valid True, init=tree list valid True
 ALL PYTHON TESTS PASSED

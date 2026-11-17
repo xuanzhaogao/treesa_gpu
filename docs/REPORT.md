@@ -160,6 +160,35 @@ pre-order sweep does); it recovers most of the per-sweep quality gap below but c
 matched wall time, so it is off by default.  The CPU reference (`ref_par_sweep`) applies each phase's visits one
 after the other; GPU and reference agree bit for bit (validation section G).
 
+### Spectral initial trees (`init="spectral"`, `treesa_gpu/spectral.py`)
+Rotations change a tree locally; they rarely change its global structure.  On large networks the starting tree
+therefore decides much of the result: the 64×64 lattice ends at tc 89–91 from omeco's greedy tree whatever the
+schedule, but at 78.6 from the row-major sweep.  Larger local moves do not close this gap: an exact
+dynamic-programming re-optimization of the k ≤ 9 branches below every node (cotengra-style subtree
+reconfiguration, CPU prototype) improved annealed trees by at most 0.003 log2 units on sat500, grid32, reg3_1000
+and sq48.  Nor do other starts: omeco's treewidth heuristic (min-degree elimination; much better than greedy as a
+tree on SAT networks, e.g. sat500 353.6 vs 493.0) and colder starting temperatures changed the annealed result by
+less than the seed-to-seed spread.
+
+A row-major sweep is a linear ordering of the tensors with small cuts, contracted as a path.  The spectral start
+finds such orderings for any network: build the tensor graph (one vertex per tensor; a label shared by k tensors
+adds 1/(k−1) to each of the k(k−1)/2 pairs), take the Laplacian eigenvectors v1..v3 above the constant one (dense
+`eigh` up to 3000 tensors, else block Krylov with block size 4 and full reorthogonalization, so that degenerate
+pairs are both captured), and sort the tensors by projections on many directions: 24 angles in the (v1, v2)
+plane, 24 random directions in (v1, v2, v3), each order also reversed, then a local refinement of the angle around
+the 3 best (on square lattices v1 and v2 are the degenerate x- and y-waves; a coarse angle gives a diagonal
+ordering with twice the cut, the best is one wave with a small tilt that orders the sites inside a column).  Every
+candidate path tree is scored exactly in O(Σ|ix|) (`path_cost`: labels alive across each cut from first/last
+positions; equal to `trees.complexity` on the path tree, tested), and the best `spectral_k` (default 4) distinct
+orderings start the chains (chain c from ordering c mod K; the binary reads several trees from one file).  The
+default schedule then starts at β = 1 instead of 0.01, so that the hot phase does not erase the ordering.
+
+Without any knowledge of the geometry this recovers the row-major sweep on the lattices (path tc: sq32 44.82,
+sq48 62.05, sq64 78.91 vs 44.86 / 62.08 / 78.93 for the row sweep) and gives sat500 383.4, grid45 101.2, reg3_2000
+340.1 as raw path trees (greedy: 493.0 / 160.0 / 604.0).  Cost: 0.3–4 s on the CPU for these networks.  Starting all
+chains from one ordering or from 8 different ones made no difference (the best orderings are near-duplicates).
+Balanced trees over the same ordering are much worse (sq32 100.5) than the path.
+
 ### Slicing (`slicing=True`)
 * Every chain carries a slice set S (an `NW`-word bitset after the tree).  Stored node labels stay
   *unsliced*: the labels of the sliced network are exactly `labels & ~S` (slicing removes the label from
@@ -200,7 +229,9 @@ after the other; GPU and reference agree bit for bit (validation section G).
   init, fixed slices, slice moves, forced cooperative visits); **G** the parallel sweep order (`--kernel par`,
   `wpc` 1 / 4 / 8 on sat100, reg3_250, lat14, grid24, grid45; `wpc` 8 on the 46×46 lattice; random init, forced
   cooperative visits, `coop_full` 32, the wide path forced, fixed slices, summaries off, slice moves; compared
-  with the CPU reference of the same order, no cross-kernel check).  Per configuration:
+  with the CPU reference of the same order, no cross-kernel check); **H** several initial trees in one file (chain c
+  from tree c mod K: the greedy tree and 3 spectral path trees) on sat100, grid24 and the 46×46 lattice with the
+  par, warp, block and seq kernels.  Per configuration:
   1. every chain is a valid tree and the **incrementally maintained labels equal a from-scratch
      recomputation from the topology** (occurrence counting) for every internal node;
   2. GPU per-chain energy kernel == host double-precision recomputation (criterion |Δlog2| < 1e-3,
@@ -210,7 +241,7 @@ after the other; GPU and reference agree bit for bit (validation section G).
      sets, literal `ruleset`/`abcacb`/`tcscrw`/`update_tree!`) gives **bit-identical** trees.
   (3) and (4) run for fixed slice sets (C: the reference uses Julia's slicer semantics, sliced log2
   size 0) and are skipped for D (only the warp kernels implement slice moves).
-  Result (`tests/check_results_sm75.txt`): **338/338 passed**, 21 skipped (chains that do not fit in
+  Result (`tests/check_results_sm75.txt`): **355/355 passed**, 21 skipped (chains that do not fit in
   Turing's 64 KB shared memory for the smem kernels).
 * `tests/test_python.py` — `trees.complexity` == omeco `tree.complexity` on omeco greedy/TreeSA
   trees; dict↔children round trip; for all schemes/inits/modes the returned dict contains every
@@ -218,9 +249,11 @@ after the other; GPU and reference agree bit for bit (validation section G).
   modeled times (`gpu_time`, `h100_time`) equal `treesa_gpu.trees` on the returned dict; with slicing
   (sat60, reg3_250, grid24 × {tc, tc+h100}) the tree's `iy` equal `recompute_outputs(tree, ixs_sliced,
   [])`, per-slice tc / sc / #sliced and `h100_time × 2^|S|` equal the binary's numbers, sc ≤ target,
-  and `runner_json` round-trips.  **62/62 passed** (`tests/test_python_results.txt`, default order `par`); with
-  `order="preorder"` the output is byte-identical to the one before the parallel order existed
-  (`tests/test_python_results_preorder.txt`).
+  and `runner_json` round-trips; spectral starts: `path_cost` equals `trees.complexity` of the path tree (random
+  orders, open labels), the returned orderings are permutations with exact tc, and `init="spectral"` / `init="tree"`
+  with a list of trees return valid trees with consistent tc / sc.  **66/66 passed**
+  (`tests/test_python_results.txt`, default order `par`); with `order="preorder"` the first 62 lines are
+  byte-identical to the output before the parallel order existed (`tests/test_python_results_preorder.txt`).
 * Cross-GPU determinism: the H100 (sm_90a build) reproduced all 96 GPU results of the slicing
   comparison bit-for-bit (same #sliced, same modeled time) — trees do not depend on the GPU.
 * All 72 saved trees in `trees/gpusa_slice/` (repository root) were re-validated independently (leaves,
@@ -859,9 +892,47 @@ Downstream use (booltn root trees: grid 3-SAT L30 α3.0, 1024 chains × 50, sc t
 seeds each): par gives sc 50 / 50 and 48 / 47 vs pre-order 50 / 47 and 47 / 48 at 0.84× the time; with 1024 chains
 the GPU is already busy, so the speed-up is small there; 3× more sweeps (250 s) gives sc 46 / 46 and 46 / 50.
 
-Still open: dense bitsets (visits still cost O(labels); sq64 hot runs are now bandwidth-bound), no
-partitioning-based initial tree (the biggest lever on large lattices), and the float energy modes are not
+Still open at that point: dense bitsets (visits still cost O(labels); sq64 hot runs are now bandwidth-bound), the
+initial tree (the biggest lever on large lattices; next section), and the float energy modes are not
 bit-reproducible against the CPU reference (see Known limitations).
+
+### Spectral initial trees (raw data `large_compare_gpu_par.jsonl` "from spectral" rows, `spectral_study.jsonl`)
+
+Design in [Spectral initial trees](#spectral-initial-trees-initspectral-treesa_gpuspectralpy).  The ladder from the
+spectral start (72 chains, order par, betas from 1, seed 1; wall time includes the 0.3–4 s ordering), next to the best
+from greedy and omeco:
+
+| instance | spectral start: tc in wall s (72×20 / 72×100 / 72×300) | best from greedy (par) | omeco TreeSA 10×50 / 10×200 |
+|---|---|---|---|
+| sat500 | 326.7 in 2 s / 322.6 in 4 s / **318.7** in 9 s | 319.7 in 90 s | 345.2 in 21 s / 327.7 in 82 s |
+| reg3_1000 | 127.9 in 1 s / **127.6** in 4 s / 127.6 in 10 s | 128.4 in 16 s | 134.8 in 11 s / 132.1 in 42 s |
+| sq32 | **44.1** in 2 s / 44.1 in 5 s / 44.3 in 13 s | 44.8 in 24 s | 46.1 in 8 s / 47.0 in 36 s |
+| grid32 | 62.7 in 4 s / 62.4 in 10 s / 61.8 in 25 s | **60.0** in 18 s | 61.6 in 21 s / 60.4 in 85 s |
+| reg3_2000 | 251.2 in 4 s / 246.7 in 15 s / **245.4** in 41 s | 254.5 in 90 s | 276.4 in 39 s / 268.1 in 146 s |
+| grid45 | 83.6 in 12 s / 83.0 in 39 s / **82.5** in 106 s | 87.9 in 116 s | 103.8 in 47 s / 90.7 in 187 s |
+| sq48 | **61.6** in 7 s / 61.6 in 25 s / 61.6 in 70 s | 63.3 in 194 s | 66.2 in 25 s / 63.4 in 102 s |
+| sq64 | **78.6** in 18 s / 78.6 in 67 s / 78.6 in 190 s | 89.1 in 226 s | 91.1 in 56 s / 93.4 in 249 s |
+
+* **Ahead of omeco on 7 of 8 networks in less wall time than omeco's runs**, by 1.8 log2 units (sq48: 61.6 in 7 s vs
+  omeco's 63.4 after 102 s) to 31 (reg3_2000: 245.4 vs 276.4 at ~40 s); sat500 318.7 in 9 s vs 327.7 in 82 s; the 64×64
+  lattice 78.6 in 18 s vs 91.1–93.4.  grid32 (lattice-local 3-SAT) is the exception:
+  the spectral start ends at 61.8–62.7, level with greedy at equal sweeps (62.45 at 72×100) and behind omeco's 60.4
+  after 85 s; its best result so far (60.0) is one greedy-start seed.
+* Two seeds at 72×100 (`spectral_study.jsonl`): sat500 322.5 / 322.6, reg3_1000 127.6 / 127.6, reg3_2000 246.0 / 249.2,
+  grid45 82.97 / 82.94, sq48 61.56 / 61.57, sq64 78.55 / 78.55: the spread across seeds is much smaller than from greedy.
+* Small networks (576 chains × 50, 3 seeds, same wall time): sat60 43.38 vs 43.77 from greedy, sat80 55.97 vs 56.63,
+  sat100 68.68 vs 70.51, sat120 86.09 vs 88.27, reg3_250 40.22 vs 41.63 (spread 0.13 vs 1.4), lat14 28.72 vs 28.71.
+* Not helping: 8 start orderings instead of 1 (near-duplicates; identical means), mixing the greedy tree into the
+  starting population (grid32 62.3–62.4 either way, sat500 0.6–1.3 worse), omeco's treewidth tree as the start.
+* booltn root trees (grid 3-SAT L30 α3.0, 1024 chains × 50, sc target 34 / 30 with sc_weight 4 / 16, 2 seeds): same sc
+  (50 / 50 and 51 / 47 vs 50 / 50 and 48 / 47 from greedy) with tc lower by 1.5–3.5 (62.9 / 63.0 vs 66.4 / 66.5 at
+  target 34), in 48 s vs 61 s.  (With the warps-per-chain floor of the final kernel, par at 1024 chains takes 58 s
+  from greedy vs 96 s for the pre-order warp kernel.)
+* Slicing with the H100-time objective (576 × 20, PA, `tc+h100`, slice_every 2, 2 seeds): spectral start better on
+  sat80 (modeled total 1.2–1.7e3 vs 1.6–2.4e3 s), reg3_250 (0.031–0.032 vs 0.041–0.068 s) and grid28 (472–491 vs
+  693–1042 s), but 4× worse on grid24 T=36 (3.7–4.0 vs 1.0 s): the path start's sc is far above the target, the slicer
+  cuts 4 labels early and keeps them, while from greedy no slice was needed.  Hence the default `init="auto"`:
+  spectral, or greedy when `slicing=True`.
 
 ## Known limitations
 
@@ -914,6 +985,7 @@ bit-reproducible against the CPU reference (see Known limitations).
 | path | content |
 |---|---|
 | `csrc/common.h` | host/device shared code: Philox4x32-10, GPU cost models v1/v2, `MoveCounts`/`acc_counts`/`energy_from_counts` (abcacb + dE from popcount counters), rule selection, Metropolis |
+| `treesa_gpu/spectral.py` | spectral initial trees: tensor graph, Laplacian eigenvectors (dense / block Krylov), orderings, exact `path_cost` |
 | `csrc/cpu_ref.h` | CPU reference: literal port of Julia `optimize_subtree!` with vector label sets and Julia-`Slicer` masking; `ref_par_sweep` for the parallel order |
 | `csrc/treesa_gpu.cu` | kernels (`k_seq`, `k_warp` with slice moves and cooperative visits, `k_block`, `k_par` (parallel sweep order), `k_energy`, `k_copy`; register fast path W ≤ 16 and wide streaming path W = 0, with optional chunk summaries), host init (random/greedy trees, topology labels, slice sets), annealing driver with population schemes, stage 2, slicing selection + greedy repair, `--check` validation mode, CLI |
 | `treesa_gpu/driver.py`, `treesa_gpu/trees.py` | Python API `optimize(..., slicing=...)`, `runner_json`, instance writer, omeco-dict ↔ tree conversion |

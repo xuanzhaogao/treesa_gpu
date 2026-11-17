@@ -30,7 +30,7 @@ RES = os.path.join(HERE, "results", "slicing_compare.jsonl")
 HOST = os.uname().nodename.split(".")[0]
 NAMES = {"sat60": "r3sat_n60_s1", "sat70": "r3sat_n70_s1", "sat80": "r3sat_n80_s1",
          "grid22": "grid_L22_a3_s1", "grid24": "grid_L24_a3_s1", "grid28": "grid_L28_a3_s1"}
-GPU = dict(nchains=576, niters=20, scheme="pa", seed=1)
+GPU = dict(nchains=576, niters=20, scheme="pa", seed=1, init="greedy")  # greedy start (the default before init="auto")
 # stage-2 schedule for tc+h100: beta 3 -> 16 (300 levels); beta 1 was too hot with slice moves
 STAGE2 = [3.0 + 13.0 * i / 299 for i in range(300)]
 

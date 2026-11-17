@@ -362,4 +362,16 @@ G par sq46 sweep band8 wpc8: CHECK PASSED | 0/0 slice moves accepted label misma
 G par reg3_250 follow wpc2: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 5.33e-06 0/4 chains differ 
 G par grid45 sums forced coop-chunks 1 wpc8: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 1.48e-05 0/4 chains differ 
 G par grid28 slicemoves wpc4: CHECK PASSED | 1328/1920 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 4.92e-06 
+H multitree sat100 par: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 8.34e-06 0/4 chains differ 
+H multitree sat100 warp: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 9.87e-06 chains differing: 0/48 0/4 chains differ 
+H multitree sat100 block: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 9.87e-06 chains differing: 0/48 0/4 chains differ 
+H multitree sat100 seq: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 9.87e-06 chains differing: 0/48 0/4 chains differ 
+H multitree grid24 par: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 8.36e-06 0/4 chains differ 
+H multitree grid24 warp: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 7.46e-06 chains differing: 0/48 0/4 chains differ 
+H multitree grid24 block: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 7.46e-06 chains differing: 0/48 0/4 chains differ 
+H multitree grid24 seq: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 7.46e-06 chains differing: 0/48 0/4 chains differ 
+H multitree sq46 par: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 3.67e-05 0/4 chains differ 
+H multitree sq46 warp: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 4.59e-06 chains differing: 0/48 0/4 chains differ 
+H multitree sq46 block: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 4.59e-06 chains differing: 0/48 0/4 chains differ 
+H multitree sq46 seq: CHECK PASSED | 0/0 slice moves accepted label mismatch vs recomputation: 0 max |dlog2cost| = 4.59e-06 chains differing: 0/48 0/4 chains differ 
 ALL CHECKS PASSED

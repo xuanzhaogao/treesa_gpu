@@ -1072,18 +1072,28 @@ static Inst read_instance(const char* path) {
   return I;
 }
 
-// Read an initial tree: m-1 lines "left right" for internal nodes m..2m-2 (root = 2m-2).
-static std::vector<uint32_t> read_tree(const char* path, int m) {
-  std::vector<uint32_t> ch(m - 1);
+// Read initial trees: K >= 1 trees one after the other, each m-1 lines "left right" for internal nodes
+// m..2m-2 (root = 2m-2).  Chain c starts from tree c % K.
+static std::vector<std::vector<uint32_t>> read_trees(const char* path, int m) {
+  std::vector<std::vector<uint32_t>> trees;
   FILE* f = fopen(path, "r");
   if (!f) { fprintf(stderr, "cannot open %s\n", path); exit(1); }
-  for (int i = 0; i < m - 1; i++) {
-    int l, r;
-    if (fscanf(f, "%d %d", &l, &r) != 2) { fprintf(stderr, "bad tree file\n"); exit(1); }
-    ch[i] = (uint32_t)l | ((uint32_t)r << 16);
+  for (;;) {
+    std::vector<uint32_t> ch(m - 1);
+    int got = 0;
+    for (int i = 0; i < m - 1; i++) {
+      int l, r;
+      if (fscanf(f, "%d %d", &l, &r) != 2) break;
+      ch[i] = (uint32_t)l | ((uint32_t)r << 16);
+      got++;
+    }
+    if (got == 0) break;
+    if (got != m - 1) { fprintf(stderr, "bad tree file (truncated tree %zu)\n", trees.size()); exit(1); }
+    trees.push_back(std::move(ch));
   }
   fclose(f);
-  return ch;
+  if (trees.empty()) { fprintf(stderr, "bad tree file (no tree)\n"); exit(1); }
+  return trees;
 }
 
 // Julia `random_exprtree` (TreeDecomp): recursive random bipartition.  Internal nodes are
@@ -1572,8 +1582,9 @@ struct Runner {
   // Build initial chains on the host (tree + topology-derived labels + slice set) and upload.
   void init_chains(std::vector<uint32_t>& host) {
     host.assign((size_t)P.chain_words * nchains, 0);
-    std::vector<uint32_t> tree0;
-    if (!O.tree.empty()) tree0 = read_tree(O.tree.c_str(), I.m);
+    std::vector<std::vector<uint32_t>> trees;
+    if (!O.tree.empty()) trees = read_trees(O.tree.c_str(), I.m);
+    const int K = (int)trees.size();  // 0: random trees; K: chain c starts from trees[c % K]
     std::vector<uint32_t> S0(NW, 0);
     if (!O.init_slices.empty()) {
       const char* p = O.init_slices.c_str();
@@ -1591,16 +1602,17 @@ struct Runner {
 #pragma omp parallel for schedule(dynamic, 16)
     for (int c = 0; c < nchains; c++) {
       uint32_t* base = &host[(size_t)c * P.chain_words];
-      if (!O.tree.empty() && c > 0) continue;  // replicated below
-      std::vector<uint32_t> ch = O.tree.empty() ? random_tree(I.m, splitmix64(O.seed * 1000003ULL + c)) : tree0;
+      if (K > 0 && c >= K) continue;  // replicated below
+      std::vector<uint32_t> ch = K == 0 ? random_tree(I.m, splitmix64(O.seed * 1000003ULL + c)) : trees[c];
       std::copy(ch.begin(), ch.end(), base + (size_t)P.nint * NW);
       if (!labels_from_topology(I, NW, ch.data(), base)) ok = false;
       else if (P.nsum) fill_sums(base, P.nint, base + P.sum_off);
     }
     if (!ok) { fprintf(stderr, "invalid initial tree\n"); exit(1); }
-    if (!O.tree.empty())
-      for (int c = 1; c < nchains; c++)
-        std::copy(host.begin(), host.begin() + P.chain_words, host.begin() + (size_t)c * P.chain_words);
+    if (K > 0)
+      for (int c = K; c < nchains; c++)
+        std::copy(host.begin() + (size_t)(c % K) * P.chain_words, host.begin() + (size_t)(c % K + 1) * P.chain_words,
+                  host.begin() + (size_t)c * P.chain_words);
     for (int c = 0; c < nchains; c++) {
       uint32_t* S = &host[(size_t)c * P.chain_words + P.s_off];
       std::copy(S0.begin(), S0.end(), S);

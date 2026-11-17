@@ -94,9 +94,11 @@ def run(method, name, cfg):
         rec["tc"], rec["sc"] = stats(tree.to_dict(), ixs, iy)
         return rec
     import treesa_gpu as tg
-    kw = {}
+    kw = dict(init="greedy")                # the configurations without "init" are from greedy (as before init="auto")
     if cfg.get("init") == "sweep":          # refine the row-major sweep (sq lattices) from a colder start
         kw = dict(init="tree", init_tree=path_tree(list(range(len(ixs)))))
+    if cfg.get("init") == "spectral":       # path trees along spectral orderings (treesa_gpu.spectral), betas from 1
+        kw = dict(init="spectral", spectral_k=cfg.get("spectral_k", 4))
     for k in ("order", "kernel", "par_follow"):    # sweep order / kernel (default: the package defaults)
         if k in cfg:
             kw[k] = cfg[k]
@@ -108,6 +110,7 @@ def run(method, name, cfg):
                              scheme=cfg["scheme"], seed=cfg.get("seed", 1), mode="tc", timeout=7200, **kw)
     rec["wall"] = round(time.time() - t0, 2)
     rec.update(tc=round(info["tc_py"], 3), sc=info["sc_py"], kernel_s=info.get("kernel_s"), kernel=info.get("kernel"),
+               t_init=round(info.get("t_greedy") or 0.0, 2), init_tcs=info.get("init_tcs"),
                t_anneal=info.get("t_anneal"), order=info.get("order"), gpu=subprocess.run(
                    ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader", "-i",
                     os.environ.get("CUDA_VISIBLE_DEVICES", "0").split(",")[0]],

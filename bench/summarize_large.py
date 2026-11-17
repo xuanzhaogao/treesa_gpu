@@ -37,6 +37,8 @@ def label(r):
         s = f"GPU{' v2' if r.get('v2') else ''}{' par' if r.get('par') else ''} {r['scheme']} {r['nchains']}x{r['niters']}{'†' if r.get('mid') else ''}"
         if r.get("init") == "sweep":
             s += f" from sweep, beta0 {r.get('beta0')}"
+        if r.get("init") == "spectral":
+            s += " from spectral"
         return s
     if m == "omeco_treesa":
         return f"omeco TreeSA {r['ntrials']}x{r['niters']}"

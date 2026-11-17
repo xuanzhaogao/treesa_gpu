@@ -130,10 +130,10 @@ def julia_betas(start=0.01, step=0.05, stop=15.0):
 # main entry point
 # ---------------------------------------------------------------------------------------------
 def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_weight=1.0, mode="tc",
-             init="greedy", seed=1, scheme="indep", order="par", kernel="auto", trunc_frac=0.25, eval_every=1,
+             init="auto", seed=1, scheme="indep", order="par", kernel="auto", trunc_frac=0.25, eval_every=1,
              gpu_model=None, h100_model=None, wpb=0, block=0, lpc=32, init_tree=None, stage2_betas=None,
              stage2_niters=None, slicing=False, slice_moves=1, slice_every=1, max_slices=0, init_slices=None,
-             wide=False, verbose=False, timeout=3600, device=None, coop_max=0, coop_min_units=0, coop_min=1, coop_full=0, coop_chunks=0, par_follow=False, par_band=0, chunk_sums=None, wpc=0, **old_names):
+             wide=False, verbose=False, timeout=3600, device=None, coop_max=0, coop_min_units=0, coop_min=1, coop_full=0, coop_chunks=0, spectral_k=4, par_follow=False, par_band=0, chunk_sums=None, wpc=0, **old_names):
     """Run GPU TreeSA.  Returns (tree_dict, info).
 
     slicing: anneal a slice set S together with the tree (see README).  Then ``tree`` is the tree of
@@ -154,8 +154,14 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
                      on ``stage2_betas`` (default 1:0.05:16, i.e. cold; ``stage2_niters`` defaults to
                      ``niters``).  Recommended for the GPU-time objective: "gpu" alone from a hot start
                      gets stuck (the launch-overhead floor and tile padding make the energy flat).
-    init:   "greedy" (omeco GreedyMethod, replicated to all chains) | "random" (Julia random_exprtree
-            per chain) | "tree" (use ``init_tree`` dict)
+    init:   "auto" (default: "spectral", or "greedy" with slicing=True: from a path tree whose sc is far above the
+            target the slicer cuts labels early and keeps them; grid24 T=36 tc+h100: 4 slices, 3.7-4.0 s modeled vs
+            0-1 slices, 1.0 s from greedy, while sat80 / reg3_250 / grid28 were 1.3-2x better from spectral)
+            | "greedy" (omeco GreedyMethod, replicated to all chains) | "random" (Julia random_exprtree
+            per chain) | "tree" (use ``init_tree``: a dict, or a list of dicts, chain c starting from tree c % K)
+            | "spectral" (path trees along the ``spectral_k`` best spectral orderings of the tensor graph, see
+            treesa_gpu.spectral; chain c starts from ordering c % K.  Default betas then start at 1, not 0.01, so
+            that the hot phase does not erase the ordering)
     scheme: "indep" (independent chains, best-of-N) | "pa" (population annealing, resampling after
             every evaluated level) | "trunc" (replace worst ``trunc_frac`` by copies of the best)
     device: GPU id for this run (sets CUDA_VISIBLE_DEVICES for the binary); see also optimize_multi.
@@ -190,8 +196,10 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
             raise TypeError(f"unexpected keyword arguments {sorted(unknown)}")
         h100_model = h100_model or old_names["gpu_model2"]
     mode = MODE_ALIASES.get(mode, mode)
+    if init == "auto":
+        init = "greedy" if slicing else "spectral"
     if betas is None:
-        betas = julia_betas()
+        betas = julia_betas(1.0, 0.05, 15.0) if init == "spectral" else julia_betas()
     gm = dict(DEFAULT_GPU_MODEL)
     if gpu_model:
         gm.update(gpu_model)
@@ -207,14 +215,24 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
     inv = {v: k for k, v in lmap.items()}
     t_greedy = 0.0
     args = [BINARY, "-i", inst]
-    if init in ("greedy", "tree"):
+    spectral_tcs = None
+    if init in ("greedy", "tree", "spectral"):
         t0 = time.time()
-        d0 = greedy_tree(ixs, iy) if init == "greedy" else init_tree
+        if init == "greedy":
+            d0s = [greedy_tree(ixs, iy)]
+        elif init == "spectral":
+            from . import spectral as _sp
+            so = _sp.spectral_orders(ixs, iy, k=spectral_k, seed=seed)
+            d0s = [_sp.path_tree(o) for _, _, o in so]
+            spectral_tcs = [round(t, 4) for t, _, _ in so]
+        else:
+            d0s = init_tree if isinstance(init_tree, (list, tuple)) else [init_tree]
         t_greedy = time.time() - t0
         tf = os.path.join(tmpdir, "tree.txt")
         with open(tf, "w") as f:
-            for a, b in dict_to_children(d0, m):
-                f.write(f"{a} {b}\n")
+            for d0 in d0s:
+                for a, b in dict_to_children(d0, m):
+                    f.write(f"{a} {b}\n")
         args += ["--tree", tf]
     bf = os.path.join(tmpdir, "betas.txt")
     with open(bf, "w") as f:
@@ -297,7 +315,8 @@ def optimize(ixs, iy, nchains=1024, betas=None, niters=50, sc_target=20.0, sc_we
     t1 = trees.tree_gpu_time(tree, ixs_s, gm)
     t2 = trees.tree_h100_time(tree, ixs_s, h100m)
     info.update(sliced=sliced, tc_py=tc, sc_py=sc, gpu_time_py=t1, h100_time_py=t2, tc_total_py=tc + len(sliced),
-                h100_time_total_py=t2 * 2.0 ** len(sliced), wall=wall, t_greedy=t_greedy, tmpdir=tmpdir)
+                h100_time_total_py=t2 * 2.0 ** len(sliced), wall=wall, t_greedy=t_greedy, tmpdir=tmpdir,
+                init_tcs=spectral_tcs, init=init)
     for fn in os.listdir(tmpdir):
         os.remove(os.path.join(tmpdir, fn))
     os.rmdir(tmpdir)

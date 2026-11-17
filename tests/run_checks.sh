@@ -112,4 +112,11 @@ run "G par sq46 sweep band8 wpc8" -i tests/data/sq46.txt --tree tests/data/sq46.
 run "G par reg3_250 follow wpc2" -i tests/data/reg3_250.txt --tree tests/data/reg3_250.tree --mode tc --kernel par --wpc 2 --par-follow
 run "G par grid45 sums forced coop-chunks 1 wpc8" -i tests/data/grid45.txt --tree tests/data/grid45.tree --mode tc --kernel par --wpc 8 --sums --coop-chunks 1
 run "G par grid28 slicemoves wpc4" -i tests/data/grid28.txt --tree tests/data/grid28.tree --mode h100 --kernel par --wpc 4 --slicing --sc-target 20
+# H: several initial trees in one file (chain c starts from tree c % K): the greedy tree followed by 3 spectral path
+# trees (tests/data/*_multi.tree), all kernel families
+for inst in sat100 grid24 sq46; do
+  for kernel in par warp block seq; do
+    run "H multitree $inst $kernel" -i tests/data/$inst.txt --tree tests/data/${inst}_multi.tree --mode tc --kernel $kernel
+  done
+done
 [ $fail = 0 ] && echo "ALL CHECKS PASSED" || echo "SOME CHECKS FAILED"

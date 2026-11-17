@@ -83,7 +83,7 @@ def main():
                             ("h100", dict(betas=[1.0 + 0.05 * i for i in range(301)], label="h100, cold β=1..16"))):
             label = extra.pop("label", f"GPU PA 576x50 [{mode}]")
             t0 = time.time()
-            tree, info = tg.optimize(ixs, iy, nchains=576, niters=50, sc_target=SC_TARGET, scheme="pa", mode=mode,
+            tree, info = tg.optimize(ixs, iy, nchains=576, niters=50, sc_target=SC_TARGET, scheme="pa", mode=mode, init="greedy",
                                      seed=1, **extra)
             w = time.time() - t0
             st = stats(tree, ixs)

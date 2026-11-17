@@ -18,14 +18,17 @@ Compared with omeco's TreeSA (Rust, multithreaded). Tables and raw data: [`docs/
 | Against omeco's heavy setting (32 trials × 200 sweeps, 10–25 s) | better trees in **1.1–2.5 s** |
 | Contraction time on an H100 ([booltn](https://github.com/xuanzhaogao/booltn)), GPU-time energy `tc+h100` | trees contract **4–64× faster** than omeco trees (grid 3-SAT L = 22: 1.24 s → 19 ms) |
 | Slicing inside the annealer | modeled total time **1.5–341× lower** than omeco TreeSA + `slice_code` (geometric mean 7.2×); random 3-SAT n = 70 measured **41.7 s** vs about 13 min projected for the omeco tree |
-| Large networks (1000–8000 tensors, RTX 6000 vs omeco on 12 threads) | parallel sweep order (default): sweeps **2.4–9.5× faster** than the pre-order kernels, **11–17×** when refining a path-like tree (64×64 lattice from the row-major sweep, 72 chains × 20: 22.4 s → 1.6 s). Spending the time on longer chains, tc at matched time drops on 4 of the 6 networks tested with several seeds and is level on the 48×48 and 64×64 lattices (random 3-SAT n = 500: 340.3 → 329.0 in ~4 s; grid 3-SAT L = 32: 62.5 → 59.6 in ~20 s). From greedy the GPU is ahead of omeco at every budget on 6 of 8 networks by 1.3–20 log2 units (n = 500: 319.7 in 90 s vs 327.7 in 82 s; 3-regular n = 2000: 254.5 in 90 s vs 268.1 in 146 s); grid 3-SAT L = 32 only at short budgets; the 48×48 lattice is level from greedy, and 61.7 in 2 s from the row-major sweep |
+| Large networks (1000–8000 tensors, RTX 6000 vs omeco on 12 threads) | **spectral start (default)**: chains start from path trees along spectral orderings of the tensor graph; ahead of omeco on 7 of 8 networks in less wall time than omeco's runs, by 1.8–31 log2 units (random 3-SAT n = 500: 318.7 in 9 s vs 327.7 in 82 s; 3-regular n = 2000: 245.4 vs 276.4 at ~40 s; grid 3-SAT L = 45: 83.0 in 39 s vs 90.7 in 187 s; 64×64 lattice: 78.6 in 18 s vs 91.1–93.4). Exception: grid 3-SAT L = 32 (61.8 vs omeco's 60.4). Parallel sweep order (default): sweeps **2.4–9.5× faster** than the pre-order kernels, **11–17×** when refining a path-like tree (64×64 lattice from the row-major sweep, 72 chains × 20: 22.4 s → 1.6 s). Spending the time on longer chains, tc at matched time drops on 4 of the 6 networks tested with several seeds and is level on the 48×48 and 64×64 lattices (random 3-SAT n = 500: 340.3 → 329.0 in ~4 s; grid 3-SAT L = 32: 62.5 → 59.6 in ~20 s). From greedy the GPU is ahead of omeco at every budget on 6 of 8 networks by 1.3–20 log2 units (n = 500: 319.7 in 90 s vs 327.7 in 82 s; 3-regular n = 2000: 254.5 in 90 s vs 268.1 in 146 s); grid 3-SAT L = 32 only at short budgets; the 48×48 lattice is level from greedy, and 61.7 in 2 s from the row-major sweep |
 | Scale | any number of labels (tested to 8064, 64×64 lattice), up to 32767 tensors |
 
 Where it does not win:
 * Easy instances, because each call costs about 0.3 s of process start.
 * Large networks (thousands of labels): label sets are dense bitsets over all labels, so each visit costs
-  O(#labels); hot runs on the largest lattice are memory-bandwidth-bound. From greedy, the 64×64 lattice stays at
-  tc 89–91 however long it anneals; a good initial tree matters more there. See the report's "Large networks" section.
+  O(#labels); hot runs on the largest lattice are memory-bandwidth-bound. The annealer's local moves rarely change a
+  tree's global structure, so the start tree decides a lot (64×64 lattice: 89–91 from greedy, 78.6 from the spectral
+  start). See the report's "Large networks" section.
+* With slicing, the default start stays greedy (`init="auto"`): from a path start far above the sc target the slicer
+  cuts labels early and keeps them (grid 3-SAT L = 24, T = 36: 4× worse modeled time; other instances 1.3–2× better).
 * The parallel order is a different visiting order than Julia's: per sweep it is up to 2.5 log2 units worse on
   2 of 5 networks (it wins at matched time). `order="preorder"` reproduces the Julia sweep bit for bit.
 * Grid slicing runs, which take as long as omeco on 96 cores; the GPU wins on contraction time, not on
@@ -36,6 +39,10 @@ Where it does not win:
 
 * **Same algorithm, more chains.** The Julia move set is ported exactly; a CPU reference port matches
   the GPU kernels bit for bit. At equal trial counts it reproduces omeco's quality.
+* **Spectral initial trees** (`init="spectral"`, the default without slicing): path trees along orderings of the
+  tensors by Laplacian eigenvectors of the tensor graph (best of many directions, each scored exactly); they recover
+  the row-major sweep on lattices without knowing the geometry, and help on random SAT and regular graphs too
+  (random 3-SAT n = 100: 68.7 vs 70.5 from greedy). `treesa_gpu.spectral`; numpy only.
 * **Parallel sweeps inside a chain** (`order="par"`, default): moves at nodes that are not parent and child
   touch disjoint data and commute, so each phase visits an independent set of nodes chosen by random priorities;
   O(log n) phases per sweep. Validated bit for bit against a CPU reference of the same order.
@@ -53,7 +60,7 @@ which includes this package as a submodule.
 ```bash
 module load cuda/12.8.0          # in a login shell
 make                             # -> treesa_gpu/bin/treesa_gpu for the local GPU (ARCH=native)
-pip install -e .                 # pure Python; optional: omeco for init="greedy"
+pip install -e .                 # pure Python + numpy; optional: omeco for init="greedy"
 ```
 
 Cross-builds: `make ARCH=sm_90a OUT=treesa_gpu/bin/treesa_gpu_sm90` (H100) or `ARCH=sm_75`

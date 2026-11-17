@@ -6,7 +6,7 @@
 (1) dict <-> children conversion round-trips,
 (2) GPU output trees are valid (binary, every leaf exactly once, internal iy from topology),
 (3) tc / sc / modeled time reported by the binary agree with treesa_gpu.trees on the returned dict,
-for all schemes, inits and energy modes.
+for all schemes, inits and energy modes; (4) slicing; (5) spectral initial trees and multi-tree init.
 """
 import math
 import os
@@ -87,6 +87,32 @@ for name, T in (("sat60", 30), ("reg3_250", 24), ("grid24", 34)):
         check(ok_tree and ok_iy and ok_c and ok_t and ok_j,
               f"slicing {name} {mode:7s} T={T}: valid={ok_tree} iy_sliced={ok_iy} |S|={len(sl)} tc/slice {info['tc']:.3f}=={tc:.3f} "
               f"sc {info['sc']}=={sc}<={T} total time {info['h100_time_total']:.4e}=={T2:.4e} json={ok_j} repair={info['n_repair']}")
+
+# (5) spectral initial trees: path_cost equals trees.complexity of the path tree (random orders, open labels), the
+# spectral orderings are permutations whose reported tc is exact, and optimize(init="spectral") (several start trees,
+# chain c from tree c % K) returns a valid tree with consistent tc / sc; also init="tree" with a list of trees.
+import random  # noqa: E402
+from treesa_gpu import spectral as sp  # noqa: E402
+for name in ("sat60", "reg3_250", "lat14", "grid24"):
+    ixs, iy = instances.get(name)
+    m = len(ixs)
+    ok = True
+    for s_ in range(4):
+        o = list(range(m))
+        random.Random(s_).shuffle(o)
+        a_, b_ = sp.path_cost(o, ixs, iy), tu.complexity(tu.recompute_outputs(sp.path_tree(o), ixs, iy), ixs)
+        ok = ok and abs(a_[0] - b_[0]) < 1e-6 and a_[1] == b_[1]
+    so = sp.spectral_orders(ixs, iy, k=3)
+    ok_o = all(sorted(o) == list(range(m)) and abs(t - tu.complexity(tu.recompute_outputs(sp.path_tree(o), ixs, iy), ixs)[0]) < 1e-6
+               for t, _, o in so)
+    tree, info = tg.optimize(ixs, iy, nchains=96, niters=3, sc_target=30, init="spectral", spectral_k=3)
+    ok_t = sorted(tu.leaf_ids(tree)) == list(range(m)) and info["valid"] and info["labels_ok"] and \
+        abs(info["tc"] - info["tc_py"]) < 1e-4 and info["sc"] == info["sc_py"] and len(info["init_tcs"]) == len(so)
+    tree2, info2 = tg.optimize(ixs, iy, nchains=96, niters=3, sc_target=30, init="tree",
+                               init_tree=[sp.path_tree(o) for _, _, o in so] + [tg.greedy_tree(ixs, iy)])
+    ok_l = sorted(tu.leaf_ids(tree2)) == list(range(m)) and info2["valid"] and abs(info2["tc"] - info2["tc_py"]) < 1e-4
+    check(ok and ok_o and ok_t and ok_l, f"spectral {name}: path_cost==complexity {ok}, orders {[round(t, 3) for t, _, _ in so]} "
+          f"exact {ok_o}, init=spectral tc {info['tc']:.4f}=={info['tc_py']:.4f} valid {ok_t}, init=tree list valid {ok_l}")
 
 print("ALL PYTHON TESTS PASSED" if fails == 0 else f"{fails} FAILURES")
 sys.exit(1 if fails else 0)
